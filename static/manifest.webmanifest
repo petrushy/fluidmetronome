@@ -1,0 +1,17 @@
+{
+  "name": "Fluid Metronome",
+  "short_name": "Metronome",
+  "description": "A metronome PWA for uneven folk rhythm structures.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f2efe8",
+  "theme_color": "#16324f",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

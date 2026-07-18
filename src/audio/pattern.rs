@@ -184,13 +184,13 @@ impl BeatModulatorFunction {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct BeatModulator {
     pub id: u64,
     pub function: BeatModulatorFunction,
-    pub amplitude_ticks: i16,
-    pub wavelength_ticks: u16,
-    pub phase_degrees: i16,
+    pub amplitude_ticks: f64,
+    pub wavelength_ticks: f64,
+    pub phase_degrees: f64,
     pub muted: bool,
     pub restart_each_loop: bool,
 }
@@ -200,16 +200,16 @@ impl BeatModulator {
         Self {
             id,
             function: BeatModulatorFunction::Sin,
-            amplitude_ticks: 2,
-            wavelength_ticks: 16,
-            phase_degrees: 0,
+            amplitude_ticks: 2.0,
+            wavelength_ticks: 16.0,
+            phase_degrees: 0.0,
             muted: false,
             restart_each_loop: true,
         }
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct RhythmGrid {
     pub title: String,
     pub bpm: u16,
@@ -364,21 +364,21 @@ impl RhythmGrid {
         }
     }
 
-    pub fn set_modulator_amplitude(&mut self, id: u64, amplitude_ticks: i16) {
+    pub fn set_modulator_amplitude(&mut self, id: u64, amplitude_ticks: f64) {
         if let Some(modulator) = self.modulators.iter_mut().find(|modulator| modulator.id == id) {
-            modulator.amplitude_ticks = amplitude_ticks.clamp(-64, 64);
+            modulator.amplitude_ticks = amplitude_ticks.clamp(-64.0, 64.0);
         }
     }
 
-    pub fn set_modulator_wavelength(&mut self, id: u64, wavelength_ticks: u16) {
+    pub fn set_modulator_wavelength(&mut self, id: u64, wavelength_ticks: f64) {
         if let Some(modulator) = self.modulators.iter_mut().find(|modulator| modulator.id == id) {
-            modulator.wavelength_ticks = wavelength_ticks.max(1);
+            modulator.wavelength_ticks = wavelength_ticks.max(0.001);
         }
     }
 
-    pub fn set_modulator_phase(&mut self, id: u64, phase_degrees: i16) {
+    pub fn set_modulator_phase(&mut self, id: u64, phase_degrees: f64) {
         if let Some(modulator) = self.modulators.iter_mut().find(|modulator| modulator.id == id) {
-            modulator.phase_degrees = phase_degrees.clamp(-360, 360);
+            modulator.phase_degrees = phase_degrees.clamp(-360.0, 360.0);
         }
     }
 

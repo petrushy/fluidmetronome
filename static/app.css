@@ -177,6 +177,57 @@ input[type="number"]::-webkit-inner-spin-button {
   color: var(--muted);
 }
 
+.timing-pill {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 252, 247, 0.72);
+}
+
+.timing-diode {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border-radius: 999px;
+  background: rgba(111, 120, 132, 0.3);
+  box-shadow: 0 0 0 5px rgba(111, 120, 132, 0.08);
+}
+
+.timing-diode.is-tight {
+  background: #67c38b;
+  box-shadow: 0 0 0 5px rgba(103, 195, 139, 0.16);
+}
+
+.timing-diode.is-late {
+  background: #eb7a70;
+  box-shadow: 0 0 0 5px rgba(235, 122, 112, 0.16);
+}
+
+.timing-diode.is-unknown {
+  background: #d6b069;
+  box-shadow: 0 0 0 5px rgba(214, 176, 105, 0.16);
+}
+
+.timing-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.timing-copy strong {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.timing-copy span {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
 .control-card {
   border-radius: 26px;
   padding: 16px;

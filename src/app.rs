@@ -1,5 +1,7 @@
 use crate::audio::pattern::{BeatModulatorFunction, InstrumentKind, RhythmGrid};
 use crate::audio::playback;
+use crate::audio::playback::{TimingHealth, TimingStatus};
+use gloo::timers::callback::Interval;
 use js_sys::{Date, Math};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen_futures::spawn_local;
@@ -9,14 +11,14 @@ use yew::prelude::*;
 const PATTERN_LIBRARY_KEY: &str = "fluidmetronome.pattern_library";
 const DEFAULT_DISPLAY_ROWS: usize = 1;
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct PatternEntry {
     id: String,
     title: String,
     grid: RhythmGrid,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct PatternLibrary {
     current_pattern_id: String,
     patterns: Vec<PatternEntry>,
@@ -339,6 +341,7 @@ pub fn app() -> Html {
     let pattern_library = use_state(load_pattern_library);
     let is_playing = use_state(|| false);
     let audio_error = use_state(|| Option::<String>::None);
+    let timing_status = use_state(TimingStatus::default);
 
     let current_pattern = pattern_library.current_pattern().clone();
     let grid = current_pattern.grid.clone();
@@ -365,6 +368,28 @@ pub fn app() -> Html {
             }
 
             || ()
+        });
+    }
+
+    {
+        let is_playing = is_playing.clone();
+        let timing_status = timing_status.clone();
+        use_effect_with(*is_playing, move |is_playing| {
+            let interval = if !*is_playing {
+                timing_status.set(TimingStatus::default());
+                None
+            } else {
+                let timing_status_now = timing_status.clone();
+                let _ = playback::timing_status().map(|status| timing_status_now.set(status));
+
+                Some(Interval::new(250, move || {
+                    if let Ok(status) = playback::timing_status() {
+                        timing_status.set(status);
+                    }
+                }))
+            };
+
+            move || drop(interval)
         });
     }
 
@@ -518,6 +543,30 @@ pub fn app() -> Html {
     };
 
     let visible_sections = step_sections(grid.step_count(), DEFAULT_DISPLAY_ROWS);
+    let timing_class = match timing_status.state {
+        TimingHealth::Tight => "is-tight",
+        TimingHealth::Late => "is-late",
+        TimingHealth::Unknown => "is-unknown",
+        TimingHealth::Idle => "is-idle",
+    };
+    let timing_copy = match timing_status.state {
+        TimingHealth::Tight => "Timing tight",
+        TimingHealth::Late => "Timing off",
+        TimingHealth::Unknown => "Checking timing",
+        TimingHealth::Idle => "Timing idle",
+    };
+    let timing_detail = match timing_status.state {
+        TimingHealth::Tight => timing_status
+            .latest_lead_ms
+            .map(|lead| format!("{lead:.1} ms lead"))
+            .unwrap_or_else(|| "healthy headroom".into()),
+        TimingHealth::Late => timing_status
+            .latest_lead_ms
+            .map(|lead| format!("{lead:.1} ms lead"))
+            .unwrap_or_else(|| "late trigger detected".into()),
+        TimingHealth::Unknown => "warming up transport".into(),
+        TimingHealth::Idle => "press start to monitor".into(),
+    };
 
     html! {
         <main class="app-shell">
@@ -534,6 +583,14 @@ pub fn app() -> Html {
                     <button class={classes!("transport-button", (*is_playing).then_some("is-playing"))} onclick={on_toggle_play}>
                         { if *is_playing { "Stop" } else { "Start" } }
                     </button>
+
+                    <div class="timing-pill">
+                        <span class={classes!("timing-diode", timing_class)}></span>
+                        <div class="timing-copy">
+                            <strong>{ timing_copy }</strong>
+                            <span>{ timing_detail }</span>
+                        </div>
+                    </div>
 
                     if let Some(error) = &*audio_error {
                         <p class="status-error">{ error }</p>
@@ -568,6 +625,8 @@ pub fn app() -> Html {
                         <option value="6">{ "6" }</option>
                         <option value="8">{ "8" }</option>
                         <option value="12">{ "12" }</option>
+                        <option value="16">{ "16" }</option>
+                        <option value="32">{ "32" }</option>
                     </select>
                 </label>
                 <button class="secondary-button" onclick={on_add_step}>{ "Add Column" }</button>
@@ -801,7 +860,7 @@ pub fn app() -> Html {
                                         let pattern_library_for_amplitude = pattern_library.clone();
                                         let on_amplitude_input = Callback::from(move |event: InputEvent| {
                                             let input: HtmlInputElement = event.target_unchecked_into();
-                                            if let Ok(value) = input.value().parse::<i16>() {
+                                            if let Ok(value) = input.value().parse::<f64>() {
                                                 let mut next = (*pattern_library_for_amplitude).clone();
                                                 next.current_pattern_mut().grid.set_modulator_amplitude(modulator_id, value);
                                                 pattern_library_for_amplitude.set(next);
@@ -811,7 +870,7 @@ pub fn app() -> Html {
                                         let pattern_library_for_wavelength = pattern_library.clone();
                                         let on_wavelength_input = Callback::from(move |event: InputEvent| {
                                             let input: HtmlInputElement = event.target_unchecked_into();
-                                            if let Ok(value) = input.value().parse::<u16>() {
+                                            if let Ok(value) = input.value().parse::<f64>() {
                                                 let mut next = (*pattern_library_for_wavelength).clone();
                                                 next.current_pattern_mut().grid.set_modulator_wavelength(modulator_id, value);
                                                 pattern_library_for_wavelength.set(next);
@@ -821,7 +880,7 @@ pub fn app() -> Html {
                                         let pattern_library_for_phase = pattern_library.clone();
                                         let on_phase_input = Callback::from(move |event: InputEvent| {
                                             let input: HtmlInputElement = event.target_unchecked_into();
-                                            if let Ok(value) = input.value().parse::<i16>() {
+                                            if let Ok(value) = input.value().parse::<f64>() {
                                                 let mut next = (*pattern_library_for_phase).clone();
                                                 next.current_pattern_mut().grid.set_modulator_phase(modulator_id, value);
                                                 pattern_library_for_phase.set(next);
@@ -880,17 +939,17 @@ pub fn app() -> Html {
 
                                                 <label class="control-field modulator-field">
                                                     <span>{ "Amplitude" }</span>
-                                                    <input type="number" min="-64" max="64" value={modulator.amplitude_ticks.to_string()} oninput={on_amplitude_input} />
+                                                    <input type="number" min="-64" max="64" step="0.1" value={modulator.amplitude_ticks.to_string()} oninput={on_amplitude_input} />
                                                 </label>
 
                                                 <label class="control-field modulator-field">
                                                     <span>{ "Wavelength" }</span>
-                                                    <input type="number" min="1" max="256" value={modulator.wavelength_ticks.to_string()} oninput={on_wavelength_input} />
+                                                    <input type="number" min="0.001" max="256" step="0.1" value={modulator.wavelength_ticks.to_string()} oninput={on_wavelength_input} />
                                                 </label>
 
                                                 <label class="control-field modulator-field">
                                                     <span>{ "Start Phase" }</span>
-                                                    <input type="number" min="-360" max="360" value={modulator.phase_degrees.to_string()} oninput={on_phase_input} />
+                                                    <input type="number" min="-360" max="360" step="0.1" value={modulator.phase_degrees.to_string()} oninput={on_phase_input} />
                                                 </label>
 
                                                 <label class="modulator-toggle">

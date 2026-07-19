@@ -284,6 +284,24 @@ input[type="number"]::-webkit-inner-spin-button {
   border-color: var(--line-strong);
 }
 
+/* A file input styled as a button: the native control is unstyleable, so the
+   label carries the appearance and the input itself is hidden. */
+.file-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.file-button input[type="file"] {
+  display: none;
+}
+
+.file-button:focus-within {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
 .secondary-button.is-active-toggle {
   background: rgba(95, 176, 151, 0.14);
   border-color: rgba(95, 176, 151, 0.32);

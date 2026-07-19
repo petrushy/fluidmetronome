@@ -88,7 +88,20 @@ and bails with a `stalled` message. `tests/audio/worklet-stall.mjs` covers it.
 
 **`sanitize()` is the deserialization boundary.** The editor's clamps
 (`set_step_delay`, input `min="1"`) are bypassed by serde, so every grid arriving
-from localStorage — and from Firestore once sync lands — must pass through it.
+from outside the editor must pass through it: localStorage on load, imported
+files (`PatternFile::from_json` calls it), and Firestore once sync lands.
+
+### Pattern files
+
+`PatternFile` in `src/audio/pattern.rs` is the export envelope — a `format`
+marker, a `version`, and a list of grids, so "export everything" needs no new
+format. Import also accepts a bare `RhythmGrid` so a hand-edited file still
+loads, rejects foreign or newer-versioned files, and never replaces the library:
+imported patterns are appended with a disambiguated title.
+
+`src/file_io.rs` holds the browser glue. Saving text needs a Blob URL and a
+synthetic anchor click — there is no "save this string" API — and the object URL
+must be revoked or the blob is retained for the document's lifetime.
 
 ### Audio levels
 

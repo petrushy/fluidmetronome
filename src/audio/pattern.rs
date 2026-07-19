@@ -655,11 +655,180 @@ mod tests {
     }
 
     #[test]
+    fn pattern_file_round_trips() {
+        let grid = RhythmGrid::demo();
+        let json = PatternFile::new(vec![grid.clone()]).to_json().unwrap();
+        let back = PatternFile::from_json(&json).unwrap();
+
+        assert_eq!(back.len(), 1);
+        assert!(back[0] == grid);
+    }
+
+    #[test]
+    fn pattern_file_accepts_a_bare_grid() {
+        let grid = RhythmGrid::demo();
+        let json = serde_json::to_string(&grid).unwrap();
+        let back = PatternFile::from_json(&json).unwrap();
+
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].title, grid.title);
+    }
+
+    #[test]
+    fn pattern_file_sanitizes_imported_grids() {
+        // A zero delay would stall the worklet, so import must not pass it through.
+        let json = r#"{"format":"fluidmetronome.patterns","version":1,"patterns":[
+            {"title":"bad","bpm":0,"ticks_per_beat":0,
+             "steps":[{"delay_ticks":0}],"tracks":[]}]}"#;
+
+        let back = PatternFile::from_json(json).unwrap();
+        assert_eq!(back[0].steps[0].delay_ticks, MIN_DELAY_TICKS);
+        assert_eq!(back[0].bpm, MIN_BPM);
+        assert_eq!(back[0].ticks_per_beat, MIN_TICKS_PER_BEAT);
+    }
+
+    #[test]
+    fn pattern_file_rejects_foreign_and_newer_files() {
+        let foreign = r#"{"format":"something.else","version":1,"patterns":[]}"#;
+        assert!(PatternFile::from_json(foreign).is_err());
+
+        let newer = format!(
+            r#"{{"format":"{PATTERN_FILE_FORMAT}","version":{},"patterns":[]}}"#,
+            PATTERN_FILE_VERSION + 1
+        );
+        assert!(PatternFile::from_json(&newer).is_err());
+
+        assert!(PatternFile::from_json("not json at all").is_err());
+        assert!(PatternFile::from_json(
+            r#"{"format":"fluidmetronome.patterns","version":1,"patterns":[]}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn title_slug_is_filename_safe() {
+        assert_eq!(title_slug("Värmland Groove"), "varmland-groove");
+        assert_eq!(title_slug("Slängpolska på Öland"), "slangpolska-pa-oland");
+        assert_eq!(title_slug("Polska  /  16"), "polska-16");
+        assert_eq!(title_slug("   "), "pattern");
+        assert_eq!(title_slug("Already-Fine"), "already-fine");
+    }
+
+    #[test]
     fn sanitize_leaves_a_healthy_grid_untouched() {
         let mut grid = RhythmGrid::demo();
         let before = grid.clone();
         grid.sanitize();
         assert!(grid == before);
+    }
+}
+
+pub const PATTERN_FILE_FORMAT: &str = "fluidmetronome.patterns";
+pub const PATTERN_FILE_VERSION: u32 = 1;
+
+/// On-disk envelope for exported patterns.
+///
+/// Versioned from the start so a later format change can still read these, and
+/// a list rather than a single grid so "export everything" needs no new format.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct PatternFile {
+    pub format: String,
+    pub version: u32,
+    pub patterns: Vec<RhythmGrid>,
+}
+
+impl PatternFile {
+    pub fn new(patterns: Vec<RhythmGrid>) -> Self {
+        Self {
+            format: PATTERN_FILE_FORMAT.into(),
+            version: PATTERN_FILE_VERSION,
+            patterns,
+        }
+    }
+
+    pub fn to_json(&self) -> Result<String, String> {
+        serde_json::to_string_pretty(self).map_err(|error| error.to_string())
+    }
+
+    /// Read an exported file, tolerating a bare grid so a hand-written or
+    /// hand-edited pattern still imports.
+    ///
+    /// Every grid is sanitised here: this is untrusted input arriving from
+    /// outside the editor's clamps, exactly like localStorage and Firestore.
+    pub fn from_json(payload: &str) -> Result<Vec<RhythmGrid>, String> {
+        let mut patterns = if let Ok(file) = serde_json::from_str::<PatternFile>(payload) {
+            if file.format != PATTERN_FILE_FORMAT {
+                return Err(format!("Not a Fluid Metronome pattern file ({}).", file.format));
+            }
+
+            if file.version > PATTERN_FILE_VERSION {
+                return Err(format!(
+                    "This file was written by a newer version (format v{}, this build reads v{PATTERN_FILE_VERSION}).",
+                    file.version
+                ));
+            }
+
+            file.patterns
+        } else if let Ok(grid) = serde_json::from_str::<RhythmGrid>(payload) {
+            vec![grid]
+        } else {
+            return Err("Could not read this file as a pattern.".into());
+        };
+
+        if patterns.is_empty() {
+            return Err("That file contains no patterns.".into());
+        }
+
+        for grid in &mut patterns {
+            grid.sanitize();
+        }
+
+        Ok(patterns)
+    }
+}
+
+/// Filename-safe form of a pattern title, e.g. "Värmland Groove" -> "varmland-groove".
+///
+/// Accented letters are transliterated rather than dropped -- titles in this app
+/// are routinely Swedish, and "v-rmland" would be a poor filename.
+pub fn title_slug(title: &str) -> String {
+    let mut slug = String::with_capacity(title.len());
+    let mut pending_dash = false;
+
+    let push = |slug: &mut String, text: &str, pending: &mut bool| {
+        if *pending && !slug.is_empty() {
+            slug.push('-');
+        }
+        *pending = false;
+        slug.push_str(text);
+    };
+
+    for raw in title.chars().flat_map(|ch| ch.to_lowercase()) {
+        let mapped = match raw {
+            'a'..='z' | '0'..='9' => Some(raw.to_string()),
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => Some("a".into()),
+            'è' | 'é' | 'ê' | 'ë' => Some("e".into()),
+            'ì' | 'í' | 'î' | 'ï' => Some("i".into()),
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' => Some("o".into()),
+            'ù' | 'ú' | 'û' | 'ü' => Some("u".into()),
+            'ý' | 'ÿ' => Some("y".into()),
+            'ñ' => Some("n".into()),
+            'ç' => Some("c".into()),
+            'æ' => Some("ae".into()),
+            'ß' => Some("ss".into()),
+            _ => None,
+        };
+
+        match mapped {
+            Some(text) => push(&mut slug, &text, &mut pending_dash),
+            None => pending_dash = true,
+        }
+    }
+
+    if slug.is_empty() {
+        "pattern".into()
+    } else {
+        slug
     }
 }
 

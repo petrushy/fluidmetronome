@@ -1,4 +1,6 @@
-use crate::audio::pattern::{BeatModulatorFunction, InstrumentKind, RhythmGrid};
+use crate::audio::pattern::{
+    title_slug, BeatModulatorFunction, InstrumentKind, PatternFile, RhythmGrid,
+};
 use crate::audio::playback;
 use crate::audio::playback::{TimingHealth, TimingStatus};
 use gloo::timers::callback::Interval;
@@ -221,6 +223,29 @@ const COLUMN_ACTIONS: [ColumnAction; 5] = [
     ColumnAction::DuplicateRight,
     ColumnAction::Delete,
 ];
+
+/// Keep an imported title distinct from what is already in the library, so a
+/// re-import is visibly a second copy rather than an apparent duplicate.
+fn unique_pattern_title(desired: &str, patterns: &[PatternEntry]) -> String {
+    let base = match desired.trim() {
+        "" => "Imported pattern",
+        trimmed => trimmed,
+    };
+
+    let taken = |candidate: &str| patterns.iter().any(|entry| entry.title == candidate);
+    if !taken(base) {
+        return base.to_string();
+    }
+
+    for suffix in 2..1000 {
+        let candidate = format!("{base} ({suffix})");
+        if !taken(&candidate) {
+            return candidate;
+        }
+    }
+
+    format!("{base} ({})", next_pattern_id())
+}
 
 fn next_pattern_name(pattern_count: usize) -> String {
     format!("Pattern {}", pattern_count + 1)
@@ -538,6 +563,77 @@ pub fn app() -> Html {
         })
     };
 
+    let on_export_pattern = {
+        let pattern_library = pattern_library.clone();
+        let audio_error = audio_error.clone();
+        Callback::from(move |_| {
+            let current = pattern_library.current_pattern();
+            let file = PatternFile::new(vec![current.grid.clone()]);
+
+            let result = file.to_json().and_then(|json| {
+                crate::file_io::download_text(
+                    &format!("{}.fluidmetronome.json", title_slug(&current.title)),
+                    &json,
+                    "application/json",
+                )
+            });
+
+            audio_error.set(result.err());
+        })
+    };
+
+    let on_import_pattern = {
+        let pattern_library = pattern_library.clone();
+        let audio_error = audio_error.clone();
+        Callback::from(move |event: Event| {
+            let input: HtmlInputElement = event.target_unchecked_into();
+            let Some(file) = input.files().and_then(|files| files.get(0)) else {
+                return;
+            };
+
+            // Clear the input so picking the same file twice still fires onchange.
+            input.set_value("");
+
+            let pattern_library = pattern_library.clone();
+            let audio_error = audio_error.clone();
+            spawn_local(async move {
+                let grids = match crate::file_io::read_text(file).await {
+                    Ok(text) => match PatternFile::from_json(&text) {
+                        Ok(grids) => grids,
+                        Err(error) => {
+                            audio_error.set(Some(error));
+                            return;
+                        }
+                    },
+                    Err(error) => {
+                        audio_error.set(Some(error));
+                        return;
+                    }
+                };
+
+                let mut next = (*pattern_library).clone();
+
+                for grid in grids {
+                    // Imported patterns are added, never replacing what is here.
+                    let title = unique_pattern_title(&grid.title, &next.patterns);
+                    let mut grid = grid;
+                    grid.title = title.clone();
+
+                    let entry = PatternEntry {
+                        id: next_pattern_id(),
+                        title,
+                        grid,
+                    };
+                    next.current_pattern_id = entry.id.clone();
+                    next.patterns.push(entry);
+                }
+
+                pattern_library.set(next);
+                audio_error.set(None);
+            });
+        })
+    };
+
     let on_delete_pattern = {
         let pattern_library = pattern_library.clone();
         Callback::from(move |_| {
@@ -760,6 +856,15 @@ pub fn app() -> Html {
                 <button class="secondary-button" onclick={on_new_pattern}>{ "New" }</button>
                 <button class="secondary-button" onclick={on_copy_pattern}>{ "Copy" }</button>
                 <button class="secondary-button" onclick={on_delete_pattern}>{ "Delete" }</button>
+                <button class="secondary-button" onclick={on_export_pattern}>{ "Export" }</button>
+                <label class="secondary-button file-button">
+                    <span>{ "Import" }</span>
+                    <input
+                        type="file"
+                        accept=".json,application/json"
+                        onchange={on_import_pattern}
+                    />
+                </label>
             </section>
 
             <section class="control-card">

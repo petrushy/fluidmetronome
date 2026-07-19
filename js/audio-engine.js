@@ -649,6 +649,26 @@
       }
     }
 
+    // Audition a single sound outside the transport. Plays the track's loaded
+    // sample when it has one, so what you hear is what the grid would play.
+    async preview(trackIndex, preset, instrument, note, velocity) {
+      await this.resumeContext();
+
+      // A short lead keeps the attack intact; scheduling at currentTime exactly
+      // can clip the first milliseconds.
+      const when = this.audioContext.currentTime + 0.02;
+      const sampleBuffer = trackIndex === null ? null : this.trackSamples.get(trackIndex);
+
+      if (sampleBuffer) {
+        this.playSample(sampleBuffer, velocity, when);
+        return true;
+      }
+
+      await this.primePresetBuffer(preset, instrument, note).catch(() => null);
+      this.playPreset(preset, instrument, note, velocity, when);
+      return true;
+    }
+
     start(pattern) {
       this.setPattern(pattern);
       this.isRunning = true;
@@ -728,6 +748,12 @@
     engine.trackSamples.set(trackIndex, audioBuffer);
     engine.trackSampleKeys.set(trackIndex, `local:${file.name}:${file.size}:${file.lastModified}`);
     return true;
+  };
+
+  // trackIndex may be -1 to audition a preset that no track has adopted yet.
+  window.fluidMetronomePreviewSound = async function (trackIndex, preset, instrument, note) {
+    const index = trackIndex < 0 ? null : trackIndex;
+    return engine.preview(index, preset || "metronome", instrument, note, 3);
   };
 
   window.fluidMetronomeGetTimingStatus = function () {

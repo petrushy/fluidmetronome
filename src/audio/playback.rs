@@ -1,4 +1,4 @@
-use crate::audio::pattern::RhythmGrid;
+use crate::audio::pattern::{InstrumentKind, RhythmGrid};
 use js_sys::Promise;
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -52,8 +52,44 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, js_name = fluidMetronomeLoadTrackSample)]
     fn fluid_metronome_load_track_sample(track_index: u32, file: JsValue) -> Promise;
 
+    #[wasm_bindgen(js_namespace = window, js_name = fluidMetronomePreviewSound)]
+    fn fluid_metronome_preview_sound(
+        track_index: i32,
+        preset: &str,
+        instrument: &str,
+        note: &str,
+    ) -> Promise;
+
     #[wasm_bindgen(js_namespace = window, js_name = fluidMetronomeGetTimingStatus)]
     fn fluid_metronome_get_timing_status() -> String;
+}
+
+/// Audition one sound without running the transport.
+///
+/// Pass `None` for `track_index` to preview a preset that is not yet assigned
+/// to a track; otherwise the track's loaded sample takes precedence, matching
+/// what the grid would actually play.
+pub async fn preview_sound(
+    track_index: Option<usize>,
+    preset: &str,
+    instrument: InstrumentKind,
+    note: &str,
+) -> Result<(), String> {
+    let index = track_index.map_or(-1, |value| value as i32);
+
+    JsFuture::from(fluid_metronome_preview_sound(
+        index,
+        preset,
+        instrument.as_label(),
+        note,
+    ))
+    .await
+    .map(|_| ())
+    .map_err(|error| {
+        error
+            .as_string()
+            .unwrap_or_else(|| "Could not play this sound.".into())
+    })
 }
 
 pub fn sync_pattern(grid: &RhythmGrid) -> Result<(), String> {

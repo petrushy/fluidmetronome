@@ -675,6 +675,9 @@ pub fn app() -> Html {
                                                         })
                                                         .unwrap_or(track.instrument.as_label());
                                                     let pattern_library_for_sample = pattern_library.clone();
+                                                    // Taken before the shadowing clone below, which the file
+                                                    // picker closure consumes.
+                                                    let audio_error_for_previews = audio_error.clone();
                                                     let audio_error = audio_error.clone();
                                                     let onchange = Callback::from(move |event: Event| {
                                                         let input: HtmlInputElement = event.target_unchecked_into();
@@ -721,10 +724,65 @@ pub fn app() -> Html {
                                                         pattern_library_for_note.set(next);
                                                     });
 
+                                                    let track_instrument = track.instrument;
+                                                    let track_note = track.note.clone();
+                                                    let track_preset = track.sound_preset.clone();
+
+                                                    // Play the track exactly as the grid would, sample included.
+                                                    let audio_error_for_preview = audio_error_for_previews.clone();
+                                                    let on_preview_track = {
+                                                        let preset = track_preset.clone();
+                                                        let note = track_note.clone();
+                                                        Callback::from(move |_| {
+                                                            let preset = preset.clone();
+                                                            let note = note.clone();
+                                                            let audio_error = audio_error_for_preview.clone();
+                                                            spawn_local(async move {
+                                                                match playback::preview_sound(
+                                                                    Some(track_index),
+                                                                    &preset,
+                                                                    track_instrument,
+                                                                    &note,
+                                                                )
+                                                                .await
+                                                                {
+                                                                    Ok(()) => audio_error.set(None),
+                                                                    Err(error) => audio_error.set(Some(error)),
+                                                                }
+                                                            });
+                                                        })
+                                                    };
+
                                                     let preset_buttons = SOUND_PRESETS.iter().map(|(preset_id, preset_label)| {
                                                         let pattern_library = pattern_library.clone();
                                                         let preset_id = (*preset_id).to_string();
                                                         let preset_label = *preset_label;
+
+                                                        let audition_preset = preset_id.clone();
+                                                        let audition_note = track_note.clone();
+                                                        let audio_error = audio_error_for_previews.clone();
+                                                        // Audition without adopting the preset, so browsing the
+                                                        // menu never overwrites the track's current sound.
+                                                        let on_audition = Callback::from(move |event: MouseEvent| {
+                                                            event.stop_propagation();
+                                                            let preset = audition_preset.clone();
+                                                            let note = audition_note.clone();
+                                                            let audio_error = audio_error.clone();
+                                                            spawn_local(async move {
+                                                                match playback::preview_sound(
+                                                                    None,
+                                                                    &preset,
+                                                                    track_instrument,
+                                                                    &note,
+                                                                )
+                                                                .await
+                                                                {
+                                                                    Ok(()) => audio_error.set(None),
+                                                                    Err(error) => audio_error.set(Some(error)),
+                                                                }
+                                                            });
+                                                        });
+
                                                         let onclick = Callback::from(move |_| {
                                                             let mut next = (*pattern_library).clone();
                                                             next.current_pattern_mut().grid.set_track_sound_preset(track_index, preset_id.clone());
@@ -732,14 +790,32 @@ pub fn app() -> Html {
                                                         });
 
                                                         html! {
-                                                            <button type="button" class="sound-option" {onclick}>{ preset_label }</button>
+                                                            <div class="sound-option-row">
+                                                                <button type="button" class="sound-option" {onclick}>{ preset_label }</button>
+                                                                <button
+                                                                    type="button"
+                                                                    class="preview-button is-inline"
+                                                                    title={format!("Preview {preset_label}")}
+                                                                    aria-label={format!("Preview {preset_label}")}
+                                                                    onclick={on_audition}
+                                                                >{ "▶" }</button>
+                                                            </div>
                                                         }
                                                     });
 
                                                     html! {
                                                         <div class="label-row">
                                                             <div class="instrument-name">
-                                                                <strong>{ &track.name }</strong>
+                                                                <div class="instrument-title">
+                                                                    <button
+                                                                        type="button"
+                                                                        class="preview-button"
+                                                                        title="Preview this sound"
+                                                                        aria-label={format!("Preview {}", &track.name)}
+                                                                        onclick={on_preview_track}
+                                                                    >{ "▶" }</button>
+                                                                    <strong>{ &track.name }</strong>
+                                                                </div>
                                                                 <small>{ sample_label }</small>
                                                                 <details class="sound-menu">
                                                                     <summary class="sample-picker">{ "Sound" }</summary>

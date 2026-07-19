@@ -539,10 +539,88 @@ input[type="number"]::-webkit-inner-spin-button {
   gap: 1px;
 }
 
+.instrument-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.instrument-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .instrument-name strong {
   font-size: 0.92rem;
   line-height: 1.05;
   font-weight: 500;
+}
+
+.preview-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--accent-strong);
+  /* Optically centres the triangle, which is left-heavy in its glyph box. */
+  font-size: 0.56rem;
+  line-height: 1;
+  text-indent: 1px;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease, color 0.15s ease;
+}
+
+.preview-button:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.preview-button:active {
+  transform: scale(0.9);
+}
+
+.preview-button:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.sound-option-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sound-option-row .sound-option {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.preview-button.is-inline {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+}
+
+@media (pointer: coarse) {
+  /* Keep the tap target usable without inflating the row visually. */
+  .preview-button {
+    width: 30px;
+    height: 30px;
+  }
+
+  .preview-button.is-inline {
+    width: 32px;
+    height: 32px;
+  }
 }
 
 .instrument-name small {

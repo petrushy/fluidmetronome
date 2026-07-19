@@ -27,6 +27,22 @@ struct PatternLibrary {
 }
 
 impl PatternLibrary {
+    /// Rename the selected pattern.
+    ///
+    /// The title lives in two places -- `PatternEntry::title` drives the picker,
+    /// `grid.title` is what an export writes into the file -- so both move
+    /// together or the exported filename stops matching its contents.
+    fn rename_current(&mut self, title: &str) {
+        let title = match title.trim() {
+            "" => return,
+            trimmed => trimmed.to_string(),
+        };
+
+        let entry = self.current_pattern_mut();
+        entry.title = title.clone();
+        entry.grid.title = title;
+    }
+
     fn demo() -> Self {
         let grid = RhythmGrid::demo();
         let entry = PatternEntry {
@@ -466,6 +482,8 @@ pub fn app() -> Html {
     let audio_error = use_state(|| Option::<String>::None);
     let timing_status = use_state(TimingStatus::default);
     let column_menu = use_state(|| Option::<ColumnMenu>::None);
+    // Some(draft) while the pattern name is being edited.
+    let renaming = use_state(|| Option::<String>::None);
 
     let current_pattern = pattern_library.current_pattern().clone();
     let grid = current_pattern.grid.clone();
@@ -560,6 +578,57 @@ pub fn app() -> Html {
             next.current_pattern_id = entry.id.clone();
             next.patterns.push(entry);
             pattern_library.set(next);
+        })
+    };
+
+    let on_start_rename = {
+        let renaming = renaming.clone();
+        let pattern_library = pattern_library.clone();
+        Callback::from(move |_| {
+            renaming.set(Some(pattern_library.current_pattern().title.clone()));
+        })
+    };
+
+    let on_rename_input = {
+        let renaming = renaming.clone();
+        Callback::from(move |event: InputEvent| {
+            let input: HtmlInputElement = event.target_unchecked_into();
+            renaming.set(Some(input.value()));
+        })
+    };
+
+    let on_commit_rename = {
+        let renaming = renaming.clone();
+        let pattern_library = pattern_library.clone();
+        Callback::from(move |_| {
+            if let Some(draft) = (*renaming).clone() {
+                let mut next = (*pattern_library).clone();
+                next.rename_current(&draft);
+                pattern_library.set(next);
+            }
+            renaming.set(None);
+        })
+    };
+
+    let on_cancel_rename = {
+        let renaming = renaming.clone();
+        Callback::from(move |_| renaming.set(None))
+    };
+
+    let on_rename_key = {
+        let renaming = renaming.clone();
+        let pattern_library = pattern_library.clone();
+        Callback::from(move |event: KeyboardEvent| match event.key().as_str() {
+            "Enter" => {
+                if let Some(draft) = (*renaming).clone() {
+                    let mut next = (*pattern_library).clone();
+                    next.rename_current(&draft);
+                    pattern_library.set(next);
+                }
+                renaming.set(None);
+            }
+            "Escape" => renaming.set(None),
+            _ => {}
         })
     };
 
@@ -846,14 +915,32 @@ pub fn app() -> Html {
             </section>
 
             <section class="pattern-card">
-                <label class="control-field pattern-select-field">
-                    <span>{ "Pattern" }</span>
-                    <select onchange={on_pattern_select} value={current_pattern.id.clone()}>
-                        { for pattern_library.patterns.iter().map(|pattern| html! {
-                            <option value={pattern.id.clone()}>{ &pattern.title }</option>
-                        })}
-                    </select>
-                </label>
+                if let Some(draft) = (*renaming).clone() {
+                    <label class="control-field pattern-select-field">
+                        <span>{ "Rename pattern" }</span>
+                        <input
+                            class="rename-input"
+                            type="text"
+                            value={draft}
+                            oninput={on_rename_input}
+                            onkeydown={on_rename_key}
+                            autofocus=true
+                            spellcheck="false"
+                        />
+                    </label>
+                    <button class="secondary-button is-active-toggle" onclick={on_commit_rename}>{ "Save" }</button>
+                    <button class="secondary-button" onclick={on_cancel_rename}>{ "Cancel" }</button>
+                } else {
+                    <label class="control-field pattern-select-field">
+                        <span>{ "Pattern" }</span>
+                        <select onchange={on_pattern_select} value={current_pattern.id.clone()}>
+                            { for pattern_library.patterns.iter().map(|pattern| html! {
+                                <option value={pattern.id.clone()}>{ &pattern.title }</option>
+                            })}
+                        </select>
+                    </label>
+                    <button class="secondary-button" onclick={on_start_rename}>{ "Rename" }</button>
+                }
                 <button class="secondary-button" onclick={on_new_pattern}>{ "New" }</button>
                 <button class="secondary-button" onclick={on_copy_pattern}>{ "Copy" }</button>
                 <button class="secondary-button" onclick={on_delete_pattern}>{ "Delete" }</button>

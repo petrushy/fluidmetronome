@@ -329,6 +329,17 @@ input[type="number"]::-webkit-inner-spin-button {
   min-width: 180px;
 }
 
+/* Sized like the picker it replaces, so the row does not jump on rename. */
+.rename-input {
+  min-width: 180px;
+}
+
+.rename-input:focus {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
 .pattern-title-field {
   flex: 1 1 240px;
 }

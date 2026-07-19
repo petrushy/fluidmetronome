@@ -46,8 +46,18 @@ If your shell picks up Homebrew `cargo`/`rustc` before the rustup-managed toolch
 
 Firebase is used only for Hosting so the app can be reached from desktop and mobile browsers.
 
+## Tests
+
+```
+cargo test --bins    # rhythm model (needs the rustup toolchain on PATH)
+npm test             # audio measurement + Chromium browser tests
+npm run test:webkit  # same browser suite under WebKit, the iOS target
+```
+
+Browser tests serve `dist/`, so run `./build.sh` first.
+
 ## Next steps
 
-1. Persist local-only sample files across browser reloads.
-2. Move timing into the audio worklet for better long-run stability on iPhone.
-3. Add better mobile touch editing for the grid.
+See [ROADMAP.md](ROADMAP.md) for the phased plan. [CLAUDE.md](CLAUDE.md) holds
+the architectural invariants worth knowing before changing timing, audio levels,
+or sequencer layout.

@@ -24,6 +24,11 @@ bindings to it. The Rust types were clearly built for it (`Track` already
 carries `sample_download_url` and `sample_storage_path`). The work stopped one
 wiring step short of working.
 
+Since then: the transport is hardened, preset levels are normalised, per-sound
+preview buttons exist, the sound menu no longer gets clipped, the label rail
+aligns with the grid, and every column header has an options menu. Playwright
+(Chromium + WebKit) and offline audio measurement are wired up as `npm test`.
+
 ## Guiding principle
 
 The three goals — cloud sync, more drum sounds, tighter timing — are not three
@@ -115,30 +120,37 @@ engine.
 - [ ] Tighten `firestore.rules` and `storage.rules` to the per-user paths the
       client actually writes.
 
-**Open design question — conflict policy.** Patterns live in localStorage and
-would also live in Firestore. When both hold edits (phone offline, desktop
-online), something must win. Last-write-wins on `updatedAt` is simplest and
-probably correct for single-user rhythm patterns, but it can silently discard
-work. The alternative is an explicit save/load library rather than background
-sync — more friction, no surprises. **To be matched against how folkfinder
-solves this.**
+**Conflict policy — decided: guarded last-write-wins.** Patterns live in
+localStorage and also in Firestore. On sync, compare the remote `updatedAt`
+against the timestamp of this device's last successful sync:
 
-## Phase 3 — Sound library
+- remote unchanged since our last sync → push local freely.
+- remote newer → the two diverged. Do not overwrite silently; surface the
+  conflict and let the user choose.
 
-**Goal: real percussion, bodhrán first.**
+This keeps the simplicity of last-write-wins for the ordinary single-device
+case, which is nearly all use, while refusing to discard work when a phone and
+a desktop have genuinely diverged. It needs a per-device `lastSyncedAt` stored
+alongside the local library, which today has no such field.
 
-Phase 1 makes this cheap: to the worklet mixer a decoded sample and a rendered
-preset are both just a `Float32Array`, so new sounds need no special path.
+## Phase 3 — Sound library (deferred)
 
-- [ ] Decide synthesized vs. sampled. A convincing bodhrán depends on the pitch
-      bend from hand pressure behind the skin, plus distinct low/high tone and
-      rim articulations — hard to synthesize honestly. Sampling is the likely
-      answer, at the cost of shipped audio assets and a PWA caching story.
-- [ ] Curate a small set: bodhrán low tone, high tone, rim; then a general kit.
-- [ ] Per-track sound picker with articulation variants.
-- [ ] Service-worker caching strategy for sample assets.
-- [ ] Round-robin or velocity-layered variants so repeated hits do not sound
-      mechanically identical.
+**Decided: no sampled instruments and no bodhrán-specific sounds for now.**
+
+Sounds stay synthesized. That keeps the bundle small, avoids a service-worker
+caching strategy for audio assets, and sidesteps the licensing question — at
+the cost of never sounding like a real drum. A convincing bodhrán depends on
+the pitch bend from hand pressure behind the skin; that is not worth faking.
+
+If this is revisited, Phase 1 makes it cheap: to the worklet mixer a decoded
+sample and a rendered preset are both just a `Float32Array`, so samples need no
+separate path. Users can already load their own file per track.
+
+Worth doing within the synthesized constraint, if the sound palette needs
+widening:
+
+- [ ] A drum-flavoured voice or two (membrane-ish tone with pitch envelope).
+- [ ] Slight per-hit variation so repeated hits are not mechanically identical.
 
 ## Phase 4 — Mobile layout
 

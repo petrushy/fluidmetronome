@@ -314,6 +314,56 @@ impl RhythmGrid {
         }
     }
 
+    /// Insert an empty column at `index`, carrying the neighbour's spacing so
+    /// the groove keeps its feel until the new column is edited.
+    pub fn insert_step(&mut self, index: usize, neighbour: usize) {
+        let index = index.min(self.steps.len());
+        let delay_ticks = self
+            .steps
+            .get(neighbour)
+            .map_or(DEFAULT_DELAY_TICKS, |step| step.delay_ticks);
+
+        self.steps.insert(index, Step::new(delay_ticks));
+        for track in &mut self.tracks {
+            let at = index.min(track.step_velocities.len());
+            track.step_velocities.insert(at, NoteVelocity::Off);
+        }
+    }
+
+    /// Copy column `source` -- spacing and every track's hit -- to `index`.
+    pub fn duplicate_step(&mut self, source: usize, index: usize) {
+        let Some(step) = self.steps.get(source).cloned() else {
+            return;
+        };
+
+        let index = index.min(self.steps.len());
+        self.steps.insert(index, step);
+        for track in &mut self.tracks {
+            let velocity = track
+                .step_velocities
+                .get(source)
+                .copied()
+                .unwrap_or(NoteVelocity::Off);
+            let at = index.min(track.step_velocities.len());
+            track.step_velocities.insert(at, velocity);
+        }
+    }
+
+    /// Remove column `index`. The last remaining column is kept, since a
+    /// pattern with no steps cannot be played.
+    pub fn remove_step(&mut self, index: usize) {
+        if self.steps.len() <= 1 || index >= self.steps.len() {
+            return;
+        }
+
+        self.steps.remove(index);
+        for track in &mut self.tracks {
+            if index < track.step_velocities.len() {
+                track.step_velocities.remove(index);
+            }
+        }
+    }
+
     pub fn remove_last_step(&mut self) {
         if self.steps.len() <= 1 {
             return;
@@ -505,6 +555,103 @@ mod tests {
         // Padding is silent, and truncation keeps the surviving hits.
         assert_eq!(grid.tracks[0].step_velocities[2], NoteVelocity::Off);
         assert_eq!(grid.tracks[1].step_velocities[2], NoteVelocity::Hard);
+    }
+
+    fn grid_with_columns() -> RhythmGrid {
+        let mut grid = RhythmGrid::demo();
+        grid.tracks[0].step_velocities = vec![
+            NoteVelocity::Hard,
+            NoteVelocity::Soft,
+            NoteVelocity::Off,
+            NoteVelocity::Medium,
+            NoteVelocity::Off,
+            NoteVelocity::Hard,
+        ];
+        grid
+    }
+
+    #[test]
+    fn insert_step_adds_an_empty_column_and_keeps_tracks_in_step() {
+        let mut grid = grid_with_columns();
+        let before = grid.steps.len();
+
+        // "Add to right" of column 1.
+        grid.insert_step(2, 1);
+
+        assert_eq!(grid.steps.len(), before + 1);
+        assert_eq!(grid.steps[2].delay_ticks, grid.steps[1].delay_ticks);
+        assert_eq!(grid.tracks[0].step_velocities[2], NoteVelocity::Off);
+        // The column that was at 2 shifted right, not overwritten.
+        assert_eq!(grid.tracks[0].step_velocities[3], NoteVelocity::Off);
+        for track in &grid.tracks {
+            assert_eq!(track.step_velocities.len(), grid.steps.len());
+        }
+    }
+
+    #[test]
+    fn duplicate_step_copies_spacing_and_hits() {
+        let mut grid = grid_with_columns();
+        let source_delay = grid.steps[1].delay_ticks;
+
+        // "Duplicate to left" of column 1.
+        grid.duplicate_step(1, 1);
+
+        assert_eq!(grid.steps[1].delay_ticks, source_delay);
+        assert_eq!(grid.steps[2].delay_ticks, source_delay);
+        assert_eq!(grid.tracks[0].step_velocities[1], NoteVelocity::Soft);
+        assert_eq!(grid.tracks[0].step_velocities[2], NoteVelocity::Soft);
+        for track in &grid.tracks {
+            assert_eq!(track.step_velocities.len(), grid.steps.len());
+        }
+    }
+
+    #[test]
+    fn duplicate_step_to_the_right_lands_after_the_source() {
+        let mut grid = grid_with_columns();
+        grid.duplicate_step(0, 1);
+
+        assert_eq!(grid.tracks[0].step_velocities[0], NoteVelocity::Hard);
+        assert_eq!(grid.tracks[0].step_velocities[1], NoteVelocity::Hard);
+        assert_eq!(grid.tracks[0].step_velocities[2], NoteVelocity::Soft);
+    }
+
+    #[test]
+    fn remove_step_drops_the_column_from_every_track() {
+        let mut grid = grid_with_columns();
+        let before = grid.steps.len();
+
+        grid.remove_step(1);
+
+        assert_eq!(grid.steps.len(), before - 1);
+        assert_eq!(grid.tracks[0].step_velocities[1], NoteVelocity::Off);
+        for track in &grid.tracks {
+            assert_eq!(track.step_velocities.len(), grid.steps.len());
+        }
+    }
+
+    #[test]
+    fn remove_step_keeps_the_last_column() {
+        let mut grid = grid_with_columns();
+        while grid.steps.len() > 1 {
+            grid.remove_step(0);
+        }
+
+        grid.remove_step(0);
+        assert_eq!(grid.steps.len(), 1);
+    }
+
+    #[test]
+    fn column_edits_ignore_out_of_range_indices() {
+        let mut grid = grid_with_columns();
+        let before = grid.clone();
+
+        grid.remove_step(99);
+        grid.duplicate_step(99, 0);
+        assert!(grid == before);
+
+        // An insert past the end clamps rather than panicking.
+        grid.insert_step(99, 99);
+        assert_eq!(grid.steps.len(), before.steps.len() + 1);
     }
 
     #[test]

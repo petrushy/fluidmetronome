@@ -137,6 +137,91 @@ fn board_columns_style(column_count: usize) -> String {
     )
 }
 
+/// An open column menu, with the viewport coordinates of the button that
+/// opened it. The menu renders at .app-shell level rather than inside the
+/// column header, because .board-scroll is a scroll container and would clip
+/// it -- the same trap that cropped the sound menu.
+#[derive(Clone, PartialEq)]
+struct ColumnMenu {
+    step_index: usize,
+    /// Ready-made CSS placement, resolved against the viewport at click time.
+    style: String,
+}
+
+/// Matches .column-menu's min-width; used to keep the menu on screen.
+const COLUMN_MENU_WIDTH: f64 = 200.0;
+const COLUMN_MENU_MARGIN: f64 = 12.0;
+
+/// Place the menu next to its button without letting it leave the viewport.
+///
+/// The menu is fixed-position, so anything pushed off screen stays off screen
+/// -- scrolling will not bring it back. Below the midpoint it therefore opens
+/// upward instead of downward.
+fn column_menu_style(rect: &web_sys::DomRect) -> String {
+    let window = web_sys::window();
+    let viewport_width = window
+        .as_ref()
+        .and_then(|w| w.inner_width().ok())
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1024.0);
+    let viewport_height = window
+        .as_ref()
+        .and_then(|w| w.inner_height().ok())
+        .and_then(|v| v.as_f64())
+        .unwrap_or(768.0);
+
+    let left = rect
+        .left()
+        .min(viewport_width - COLUMN_MENU_WIDTH - COLUMN_MENU_MARGIN)
+        .max(COLUMN_MENU_MARGIN);
+
+    if rect.bottom() > viewport_height * 0.55 {
+        let bottom = (viewport_height - rect.top() + 6.0).max(COLUMN_MENU_MARGIN);
+        format!("left: {left}px; bottom: {bottom}px;")
+    } else {
+        format!("left: {left}px; top: {}px;", rect.bottom() + 6.0)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ColumnAction {
+    AddLeft,
+    AddRight,
+    DuplicateLeft,
+    DuplicateRight,
+    Delete,
+}
+
+impl ColumnAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::AddLeft => "Add column to left",
+            Self::AddRight => "Add column to right",
+            Self::DuplicateLeft => "Duplicate to left",
+            Self::DuplicateRight => "Duplicate to right",
+            Self::Delete => "Delete column",
+        }
+    }
+
+    fn apply(self, grid: &mut RhythmGrid, step_index: usize) {
+        match self {
+            Self::AddLeft => grid.insert_step(step_index, step_index),
+            Self::AddRight => grid.insert_step(step_index + 1, step_index),
+            Self::DuplicateLeft => grid.duplicate_step(step_index, step_index),
+            Self::DuplicateRight => grid.duplicate_step(step_index, step_index + 1),
+            Self::Delete => grid.remove_step(step_index),
+        }
+    }
+}
+
+const COLUMN_ACTIONS: [ColumnAction; 5] = [
+    ColumnAction::AddLeft,
+    ColumnAction::AddRight,
+    ColumnAction::DuplicateLeft,
+    ColumnAction::DuplicateRight,
+    ColumnAction::Delete,
+];
+
 fn next_pattern_name(pattern_count: usize) -> String {
     format!("Pattern {}", pattern_count + 1)
 }
@@ -355,6 +440,7 @@ pub fn app() -> Html {
     let is_playing = use_state(|| false);
     let audio_error = use_state(|| Option::<String>::None);
     let timing_status = use_state(TimingStatus::default);
+    let column_menu = use_state(|| Option::<ColumnMenu>::None);
 
     let current_pattern = pattern_library.current_pattern().clone();
     let grid = current_pattern.grid.clone();
@@ -579,6 +665,53 @@ pub fn app() -> Html {
             .unwrap_or_else(|| "late trigger detected".into()),
         TimingHealth::Unknown => "warming up transport".into(),
         TimingHealth::Idle => "press start to monitor".into(),
+    };
+
+    // Rendered at .app-shell level, outside .board-scroll, so the scroll
+    // container cannot clip it.
+    let column_menu_view: Html = match (*column_menu).clone() {
+        None => Html::default(),
+        Some(menu) => {
+            let step_index = menu.step_index;
+            let can_delete = grid.step_count() > 1;
+            let close = {
+                let column_menu = column_menu.clone();
+                Callback::from(move |_: MouseEvent| column_menu.set(None))
+            };
+
+            let items = COLUMN_ACTIONS.iter().copied().map(|action| {
+                let is_delete = action == ColumnAction::Delete;
+                let pattern_library = pattern_library.clone();
+                let column_menu = column_menu.clone();
+                let onclick = Callback::from(move |_| {
+                    let mut next = (*pattern_library).clone();
+                    action.apply(&mut next.current_pattern_mut().grid, step_index);
+                    pattern_library.set(next);
+                    column_menu.set(None);
+                });
+
+                html! {
+                    <button
+                        type="button"
+                        role="menuitem"
+                        class={classes!("column-menu-item", is_delete.then_some("is-danger"))}
+                        disabled={is_delete && !can_delete}
+                        {onclick}
+                    >{ action.label() }</button>
+                }
+            });
+
+            html! {
+                <>
+                    // Any click outside the menu dismisses it.
+                    <div class="column-menu-backdrop" onclick={close}></div>
+                    <div class="column-menu" role="menu" style={menu.style.clone()}>
+                        <p class="column-menu-title">{ format!("Column {}", step_index + 1) }</p>
+                        { for items }
+                    </div>
+                </>
+            }
+        }
     };
 
     html! {
@@ -866,10 +999,45 @@ pub fn app() -> Html {
                                                             }
                                                         });
 
+                                                        let column_menu = column_menu.clone();
+                                                        let is_open = column_menu
+                                                            .as_ref()
+                                                            .is_some_and(|menu| menu.step_index == step_index);
+                                                        let on_menu_open = Callback::from(move |event: MouseEvent| {
+                                                            event.stop_propagation();
+                                                            // Anchor to the button so the menu tracks its
+                                                            // column even after the board is scrolled.
+                                                            let rect = event
+                                                                .target_unchecked_into::<Element>()
+                                                                .get_bounding_client_rect();
+
+                                                            if column_menu
+                                                                .as_ref()
+                                                                .is_some_and(|menu| menu.step_index == step_index)
+                                                            {
+                                                                column_menu.set(None);
+                                                            } else {
+                                                                column_menu.set(Some(ColumnMenu {
+                                                                    step_index,
+                                                                    style: column_menu_style(&rect),
+                                                                }));
+                                                            }
+                                                        });
+
                                                         html! {
-                                                            <label class="delay-chip">
-                                                                <input type="number" min="1" max="32" value={step.delay_ticks.to_string()} oninput={oninput} />
-                                                            </label>
+                                                            <div class="delay-chip">
+                                                                <label class="delay-value">
+                                                                    <input type="number" min="1" max="32" value={step.delay_ticks.to_string()} oninput={oninput} />
+                                                                </label>
+                                                                <button
+                                                                    type="button"
+                                                                    class={classes!("column-menu-button", is_open.then_some("is-open"))}
+                                                                    title="Column options"
+                                                                    aria-label={format!("Options for column {}", step_index + 1)}
+                                                                    aria-expanded={is_open.to_string()}
+                                                                    onclick={on_menu_open}
+                                                                >{ "⋯" }</button>
+                                                            </div>
                                                         }
                                                     })
                                                 }
@@ -1068,6 +1236,8 @@ pub fn app() -> Html {
                     }
                 </div>
             </section>
+
+            { column_menu_view }
         </main>
     }
 }

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoteVelocity {
     Off,
     Soft,
@@ -107,6 +107,14 @@ impl InstrumentKind {
     }
 }
 
+/// A step must advance the transport by at least one tick. A zero here stalls
+/// the worklet's scheduling loop, so it is clamped at every entry point.
+pub const MIN_DELAY_TICKS: u8 = 1;
+pub const DEFAULT_DELAY_TICKS: u8 = 8;
+pub const MIN_BPM: u16 = 30;
+pub const MAX_BPM: u16 = 280;
+pub const MIN_TICKS_PER_BEAT: u8 = 1;
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
     pub delay_ticks: u8,
@@ -114,7 +122,9 @@ pub struct Step {
 
 impl Step {
     pub fn new(delay_ticks: u8) -> Self {
-        Self { delay_ticks }
+        Self {
+            delay_ticks: delay_ticks.max(MIN_DELAY_TICKS),
+        }
     }
 }
 
@@ -266,6 +276,32 @@ impl RhythmGrid {
         }
     }
 
+    /// Force a grid into a shape the audio worklet can safely play.
+    ///
+    /// `Step::new` and the editor callbacks both clamp their inputs, but
+    /// `Deserialize` bypasses them entirely — so every grid that arrives from
+    /// localStorage, and later from Firestore, must pass through here before it
+    /// reaches the transport.
+    pub fn sanitize(&mut self) {
+        self.bpm = self.bpm.clamp(MIN_BPM, MAX_BPM);
+        self.ticks_per_beat = self.ticks_per_beat.max(MIN_TICKS_PER_BEAT);
+
+        if self.steps.is_empty() {
+            self.steps.push(Step::new(DEFAULT_DELAY_TICKS));
+        }
+
+        for step in &mut self.steps {
+            step.delay_ticks = step.delay_ticks.max(MIN_DELAY_TICKS);
+        }
+
+        // A track whose velocity count disagrees with the step count leaves the
+        // grid renderer and the scheduler reading different lengths.
+        let step_count = self.steps.len();
+        for track in &mut self.tracks {
+            track.resize(step_count);
+        }
+    }
+
     pub fn step_count(&self) -> usize {
         self.steps.len()
     }
@@ -292,7 +328,7 @@ impl RhythmGrid {
 
     pub fn set_step_delay(&mut self, index: usize, delay_ticks: u8) {
         if let Some(step) = self.steps.get_mut(index) {
-            step.delay_ticks = delay_ticks.max(1);
+            step.delay_ticks = delay_ticks.max(MIN_DELAY_TICKS);
         }
     }
 
@@ -392,6 +428,91 @@ impl RhythmGrid {
         if let Some(modulator) = self.modulators.iter_mut().find(|modulator| modulator.id == id) {
             modulator.restart_each_loop = restart_each_loop;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grid_from_json(json: &str) -> RhythmGrid {
+        serde_json::from_str(json).expect("fixture should deserialize")
+    }
+
+    #[test]
+    fn step_new_clamps_zero_delay() {
+        assert_eq!(Step::new(0).delay_ticks, MIN_DELAY_TICKS);
+        assert_eq!(Step::new(5).delay_ticks, 5);
+    }
+
+    #[test]
+    fn deserialization_preserves_zero_delay_until_sanitized() {
+        // This is the reason sanitize() has to exist: serde bypasses Step::new.
+        let mut grid = grid_from_json(
+            r#"{"title":"t","bpm":108,"ticks_per_beat":8,
+                "steps":[{"delay_ticks":8},{"delay_ticks":0}],"tracks":[]}"#,
+        );
+        assert_eq!(grid.steps[1].delay_ticks, 0);
+
+        grid.sanitize();
+        assert_eq!(grid.steps[1].delay_ticks, MIN_DELAY_TICKS);
+    }
+
+    #[test]
+    fn sanitize_clamps_tempo_fields() {
+        let mut grid = grid_from_json(
+            r#"{"title":"t","bpm":0,"ticks_per_beat":0,
+                "steps":[{"delay_ticks":8}],"tracks":[]}"#,
+        );
+        grid.sanitize();
+
+        assert_eq!(grid.bpm, MIN_BPM);
+        assert_eq!(grid.ticks_per_beat, MIN_TICKS_PER_BEAT);
+
+        let mut fast = grid_from_json(
+            r#"{"title":"t","bpm":65535,"ticks_per_beat":8,
+                "steps":[{"delay_ticks":8}],"tracks":[]}"#,
+        );
+        fast.sanitize();
+        assert_eq!(fast.bpm, MAX_BPM);
+    }
+
+    #[test]
+    fn sanitize_fills_empty_step_list() {
+        let mut grid = grid_from_json(
+            r#"{"title":"t","bpm":108,"ticks_per_beat":8,"steps":[],"tracks":[]}"#,
+        );
+        grid.sanitize();
+
+        assert_eq!(grid.steps.len(), 1);
+        assert_eq!(grid.steps[0].delay_ticks, DEFAULT_DELAY_TICKS);
+    }
+
+    #[test]
+    fn sanitize_aligns_track_length_with_steps() {
+        let mut grid = grid_from_json(
+            r#"{"title":"t","bpm":108,"ticks_per_beat":8,
+                "steps":[{"delay_ticks":8},{"delay_ticks":8},{"delay_ticks":8}],
+                "tracks":[
+                  {"name":"short","instrument":"Click","step_velocities":[3]},
+                  {"name":"long","instrument":"Click","step_velocities":[3,3,3,3,3]}
+                ]}"#,
+        );
+        grid.sanitize();
+
+        assert_eq!(grid.tracks[0].step_velocities.len(), 3);
+        assert_eq!(grid.tracks[1].step_velocities.len(), 3);
+        // Padding is silent, and truncation keeps the surviving hits.
+        assert_eq!(grid.tracks[0].step_velocities[2], NoteVelocity::Off);
+        assert_eq!(grid.tracks[1].step_velocities[2], NoteVelocity::Hard);
+    }
+
+    #[test]
+    fn sanitize_leaves_a_healthy_grid_untouched() {
+        let mut grid = RhythmGrid::demo();
+        let before = grid.clone();
+        grid.sanitize();
+        assert!(grid == before);
     }
 }
 

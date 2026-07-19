@@ -1,3 +1,10 @@
+// Mirrors MIN_DELAY_TICKS in src/audio/pattern.rs.
+const MIN_DELAY_TICKS = 1;
+
+// A render quantum only spans 128 frames, so needing this many steps in one
+// pass means the pattern is degenerate rather than merely dense.
+const MAX_STEPS_PER_RENDER = 512;
+
 class FluidMetronomeProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -49,22 +56,50 @@ class FluidMetronomeProcessor extends AudioWorkletProcessor {
       return true;
     }
 
+    // A non-finite horizon makes the loop below silently never run, so the
+    // transport would produce no sound and no explanation. Catch it here.
     const horizonFrame = currentFrame + this.scheduleHorizonFrames();
+    if (!Number.isFinite(horizonFrame)) {
+      this.isRunning = false;
+      this.port.postMessage({ type: "stalled", generation: this.generation });
+      return true;
+    }
+
+    let scheduled = 0;
     while (this.nextStepFrame < horizonFrame) {
-      this.scheduleCurrentStep();
+      // Both guards protect the audio render thread: a step that fails to
+      // advance the transport would otherwise spin here forever and hang the
+      // tab, not merely stop the sound.
+      if (!this.scheduleCurrentStep()) {
+        this.isRunning = false;
+        this.port.postMessage({ type: "stalled", generation: this.generation });
+        break;
+      }
+
+      if (++scheduled >= MAX_STEPS_PER_RENDER) {
+        break;
+      }
     }
 
     return true;
   }
 
+  // Returns false when the transport failed to move forward, which means the
+  // pattern is unplayable and scheduling must not continue.
   scheduleCurrentStep() {
     const step = this.pattern.steps[this.nextStepIndex];
     if (!step) {
-      return;
+      return false;
     }
 
+    const tickFrames = this.tickDurationFrames();
+    if (!Number.isFinite(tickFrames) || tickFrames <= 0) {
+      return false;
+    }
+
+    const delayTicks = Math.max(MIN_DELAY_TICKS, Number(step.delay_ticks) || 0);
     const stepFrame = this.nextStepFrame;
-    const modulationFrames = this.totalModulationTicks(this.nextStepTick) * this.tickDurationFrames();
+    const modulationFrames = this.totalModulationTicks(this.nextStepTick) * tickFrames;
     this.port.postMessage({
       type: "trigger",
       generation: this.generation,
@@ -72,13 +107,21 @@ class FluidMetronomeProcessor extends AudioWorkletProcessor {
       when: (stepFrame + modulationFrames) / sampleRate,
     });
 
-    this.nextStepTick += step.delay_ticks;
-    this.nextStepFrame = stepFrame + step.delay_ticks * this.tickDurationFrames();
+    this.nextStepTick += delayTicks;
+    this.nextStepFrame = stepFrame + delayTicks * tickFrames;
     this.nextStepIndex = (this.nextStepIndex + 1) % this.pattern.steps.length;
+
+    return this.nextStepFrame > stepFrame;
   }
 
   tickDurationFrames() {
-    return sampleRate * 60 / this.pattern.bpm / this.pattern.ticks_per_beat;
+    const bpm = Number(this.pattern.bpm);
+    const ticksPerBeat = Number(this.pattern.ticks_per_beat);
+    if (!(bpm > 0) || !(ticksPerBeat > 0)) {
+      return NaN;
+    }
+
+    return sampleRate * 60 / bpm / ticksPerBeat;
   }
 
   cycleTicks() {

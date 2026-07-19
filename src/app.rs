@@ -93,7 +93,20 @@ fn load_pattern_library() -> PatternLibrary {
         return PatternLibrary::demo();
     };
 
-    serde_json::from_str(&payload).unwrap_or_else(|_| PatternLibrary::demo())
+    let Ok(mut library) = serde_json::from_str::<PatternLibrary>(&payload) else {
+        return PatternLibrary::demo();
+    };
+
+    // Stored JSON has not been through the editor's clamps.
+    if library.patterns.is_empty() {
+        return PatternLibrary::demo();
+    }
+
+    for pattern in &mut library.patterns {
+        pattern.grid.sanitize();
+    }
+
+    library
 }
 
 fn step_sections(step_count: usize, requested_rows: usize) -> Vec<(usize, usize)> {

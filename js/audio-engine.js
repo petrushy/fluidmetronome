@@ -91,6 +91,14 @@
     }
 
     handleTransportMessage(message) {
+      if (message.type === "stalled") {
+        if (message.generation === this.transportGeneration) {
+          console.error("Transport stalled: pattern cannot advance.");
+          this.stop();
+        }
+        return;
+      }
+
       if (message.type !== "trigger" || !this.isRunning || !this.pattern) {
         return;
       }

@@ -375,6 +375,22 @@ impl RhythmGrid {
             .sum()
     }
 
+    /// Tick position where each column starts, the first at 0.
+    ///
+    /// A column's `delay_ticks` is the gap until the *next* column, so these are
+    /// the running totals, and the last column starts before `total_ticks()`.
+    pub fn step_tick_offsets(&self) -> Vec<f64> {
+        let mut offsets = Vec::with_capacity(self.steps.len());
+        let mut tick = 0u32;
+
+        for step in &self.steps {
+            offsets.push(f64::from(tick));
+            tick += u32::from(step.delay_ticks);
+        }
+
+        offsets
+    }
+
     /// Length of one loop in beats. Fractional by design: an uneven pattern is
     /// under no obligation to close on a whole beat.
     pub fn total_beats(&self) -> f64 {
@@ -802,6 +818,17 @@ mod tests {
         assert_eq!(grid.step_count(), 6);
         assert_eq!(grid.total_ticks(), 40);
         assert!((grid.total_beats() - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn step_tick_offsets_start_at_zero_and_run_to_the_cycle() {
+        let grid = RhythmGrid::demo();
+        // The demo groove is 8 5 7 8 4 8.
+        assert_eq!(grid.step_tick_offsets(), vec![0.0, 8.0, 13.0, 20.0, 28.0, 32.0]);
+        // The last column starts one gap before the loop closes.
+        let last = *grid.step_tick_offsets().last().unwrap();
+        assert_eq!(last + f64::from(grid.steps.last().unwrap().delay_ticks),
+                   f64::from(grid.total_ticks()));
     }
 
     #[test]

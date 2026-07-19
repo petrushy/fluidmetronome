@@ -73,6 +73,8 @@ const readShape = () => page.evaluate(() => {
   return {
     points,
     startY: Number(start.getAttribute("cy")),
+    columnXs: [...svg.querySelectorAll(".shape-column")].map((l) => Number(l.getAttribute("x1"))),
+    delays: [...document.querySelectorAll(".delay-chip input")].map((i) => Number(i.value)),
     id: Number(svg.getAttribute("data-modulator-id")),
     cycleTicks: stat("Mini-ticks"),
     fn: fieldValue("Function"),
@@ -181,6 +183,33 @@ const quarterIndex = Math.round((SAMPLES * shape.wavelength) / (4 * shape.cycleT
 const firstQuarter = shape.points[quarterIndex];
 check("negative amplitude inverts the curve", firstQuarter[1] > HEIGHT / 2,
   `y=${firstQuarter?.[1]} at index ${quarterIndex} (axis ${HEIGHT / 2})`);
+
+// --- the column bars must sit on the ticks where columns actually fire ---
+await page.locator(".modulator-field select").first().selectOption("Sin");
+await setField("Amplitude", 2);
+shape = await readShape();
+
+// Running totals of delay_ticks, first column at 0.
+const expectedTicks = [];
+shape.delays.reduce((tick, delay) => { expectedTicks.push(tick); return tick + delay; }, 0);
+const expectedXs = expectedTicks.map((t) => (t / shape.cycleTicks) * WIDTH);
+
+check("one bar per column", shape.columnXs.length === shape.delays.length,
+  `${shape.columnXs.length} bars for ${shape.delays.length} columns`);
+check("first column sits at tick 0", Math.abs(shape.columnXs[0]) < 0.02, String(shape.columnXs[0]));
+check("bars land on the column ticks",
+  expectedXs.every((x, i) => Math.abs(shape.columnXs[i] - x) <= 0.02),
+  `drew [${shape.columnXs.map((x) => x.toFixed(1))}] expected [${expectedXs.map((x) => x.toFixed(1))}]`);
+
+// Editing a column's spacing must move the bars with it.
+await page.locator(".delay-chip input").first().fill("2");
+await page.waitForTimeout(250);
+const moved = await readShape();
+const movedExpected = [];
+moved.delays.reduce((tick, delay) => { movedExpected.push(tick); return tick + delay; }, 0);
+check("bars follow a spacing edit",
+  movedExpected.every((t, i) => Math.abs(moved.columnXs[i] - (t / moved.cycleTicks) * WIDTH) <= 0.02),
+  `delays [${moved.delays}]`);
 
 console.log(`\n[${name}] page errors:`, errors.length ? errors : "none");
 console.log(failures === 0 ? `[${name}] diagram agrees with the worklet` : `[${name}] ${failures} FAILING`);

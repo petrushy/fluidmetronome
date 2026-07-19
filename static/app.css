@@ -536,8 +536,9 @@ input[type="number"]::-webkit-inner-spin-button {
 /* Curve of one loop of the modulator. Height matches the adjacent controls so
    the row keeps a single baseline. */
 .modulator-shape {
-  flex: 0 0 auto;
-  width: 128px;
+  flex: 1 1 160px;
+  min-width: 128px;
+  max-width: 320px;
   height: 48px;
   border-radius: 12px;
   border: 1px solid var(--line);
@@ -549,6 +550,15 @@ input[type="number"]::-webkit-inner-spin-button {
   stroke: var(--line-strong);
   stroke-width: 1;
   stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+/* One per column, at the tick it fires. These are the only points the
+   modulator is sampled at; the curve between them is never heard. */
+.shape-column {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  opacity: 0.55;
   vector-effect: non-scaling-stroke;
 }
 

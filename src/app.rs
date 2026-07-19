@@ -149,11 +149,28 @@ fn step_sections(step_count: usize, requested_rows: usize) -> Vec<(usize, usize)
     sections
 }
 
-fn board_columns_style(column_count: usize) -> String {
-    format!(
-        "grid-template-columns: repeat({}, minmax(30px, 1fr));",
-        column_count
-    )
+/// Narrowest a column may get, whatever its spacing. Below this the cell stops
+/// being a usable target and the delay field stops being readable.
+const MIN_COLUMN_PX: u8 = 34;
+
+/// Size each column in proportion to its own `delay_ticks`, so the uneven
+/// spacing of a pattern is visible in the grid rather than only in the numbers.
+///
+/// `minmax(MIN, Nfr)` keeps a short column usable: the fr share distributes the
+/// free space proportionally, but never below the floor. A pattern with one very
+/// long column therefore compresses the rest only until they hit that floor.
+fn board_columns_style(delays: &[u8]) -> String {
+    let mut style = String::from("grid-template-columns:");
+
+    for delay in delays {
+        style.push_str(&format!(
+            " minmax({MIN_COLUMN_PX}px, {}fr)",
+            (*delay).max(1)
+        ));
+    }
+
+    style.push(';');
+    style
 }
 
 /// An open column menu, with the viewport coordinates of the button that
@@ -278,7 +295,11 @@ const SHAPE_SAMPLES: usize = 96;
 /// The curve is normalised to the modulator's own amplitude so the shape stays
 /// visible at any depth; the sign is preserved, so a negative amplitude flips
 /// the picture as it flips the timing.
-fn modulator_shape(modulator: &crate::audio::pattern::BeatModulator, cycle_ticks: f64) -> Html {
+fn modulator_shape(
+    modulator: &crate::audio::pattern::BeatModulator,
+    cycle_ticks: f64,
+    column_ticks: &[f64],
+) -> Html {
     let domain = if cycle_ticks > 0.0 {
         cycle_ticks
     } else {
@@ -317,6 +338,26 @@ fn modulator_shape(modulator: &crate::audio::pattern::BeatModulator, cycle_ticks
         modulator.amplitude_ticks,
     );
 
+    // One bar per column, at the tick where that column fires. These are the
+    // only points the modulator is actually sampled at -- the curve between
+    // them is never heard.
+    let columns = column_ticks
+        .iter()
+        .filter(|tick| **tick <= domain)
+        .map(|tick| {
+            let x = (tick / domain) * SHAPE_WIDTH;
+            html! {
+                <line
+                    class="shape-column"
+                    x1={format!("{x:.2}")}
+                    y1="0"
+                    x2={format!("{x:.2}")}
+                    y2={SHAPE_HEIGHT.to_string()}
+                />
+            }
+        })
+        .collect::<Html>();
+
     html! {
         <svg
             class="modulator-shape"
@@ -329,9 +370,10 @@ fn modulator_shape(modulator: &crate::audio::pattern::BeatModulator, cycle_ticks
             aria-label={label.clone()}
         >
             <title>{ label }</title>
+            { columns }
             <line class="shape-axis" x1="0" y1={mid.to_string()} x2={SHAPE_WIDTH.to_string()} y2={mid.to_string()} />
             <polyline class="shape-curve" points={points} />
-            // Marks the value at tick 0, the start of the loop.
+            // Marks the value at tick 0, where the first column sits.
             <circle class="shape-start" cx="0" cy={format!("{start_y:.2}")} r="2.6" />
         </svg>
     }
@@ -602,6 +644,8 @@ pub fn app() -> Html {
 
     let current_pattern = pattern_library.current_pattern().clone();
     let grid = current_pattern.grid.clone();
+    // Where each column falls in the loop; used to mark them on modulator plots.
+    let column_ticks = grid.step_tick_offsets();
 
     {
         let pattern_library = pattern_library.clone();
@@ -1135,7 +1179,11 @@ pub fn app() -> Html {
                     <div class="sequencer-stack">
                         {
                             for visible_sections.iter().map(|&(start, end)| {
-                                let section_len = end - start;
+                                // Column widths follow each column's own spacing.
+                                let section_delays: Vec<u8> = grid.steps[start..end]
+                                    .iter()
+                                    .map(|step| step.delay_ticks)
+                                    .collect();
 
                                 html! {
                                     <div class="sequencer-layout">
@@ -1335,7 +1383,7 @@ pub fn app() -> Html {
                                         // names while the grid moves.
                                         <div class="board-scroll">
                                         <div class="board-shell">
-                                            <div class="board-header" style={board_columns_style(section_len)}>
+                                            <div class="board-header" style={board_columns_style(&section_delays)}>
                                                 {
                                                     for grid.steps[start..end].iter().enumerate().map(|(offset, step)| {
                                                         let step_index = start + offset;
@@ -1393,7 +1441,7 @@ pub fn app() -> Html {
                                                 }
                                             </div>
 
-                                            <div class="board-grid" style={board_columns_style(section_len)}>
+                                            <div class="board-grid" style={board_columns_style(&section_delays)}>
                                                 {
                                                     for grid.tracks.iter().enumerate().flat_map(|(track_index, track)| {
                                                         let pattern_library = pattern_library.clone();
@@ -1539,7 +1587,6 @@ pub fn app() -> Html {
 
                                         html! {
                                             <div class={classes!("modulator-item", modulator.muted.then_some("is-muted"))}>
-                                                { modulator_shape(modulator, grid.total_ticks() as f64) }
                                                 <label class="control-field modulator-field">
                                                     <span>{ "Function" }</span>
                                                     <select onchange={on_function_change}>
@@ -1571,6 +1618,8 @@ pub fn app() -> Html {
                                                     <input type="checkbox" checked={modulator.restart_each_loop} onchange={on_restart_toggle} />
                                                     <span>{ "Restart at grid start" }</span>
                                                 </label>
+
+                                                { modulator_shape(modulator, grid.total_ticks() as f64, &column_ticks) }
 
                                                 <div class="modulator-actions">
                                                     <button class={classes!("secondary-button", modulator.muted.then_some("is-active-toggle"))} onclick={on_mute_toggle}>

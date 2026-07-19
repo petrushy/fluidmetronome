@@ -84,6 +84,17 @@ remove the main thread from the playback path entirely.
 Modulators displace `when` only — `nextStepFrame` advances unmodulated, so
 modulation never accumulates drift. Preserve that.
 
+**Sign convention: positive is later, negative is earlier.** A modulator value
+of +2 at a column delays that column by 2 mini-ticks; -2 pulls it 2 earlier.
+Measured, not assumed — `tests/audio/modulator-direction.mjs` reads real trigger
+times out of the worklet.
+
+Note what this is *not*: modulation does not edit a column's `delay_ticks`. Each
+note is displaced independently, so the audible **gap** between two columns
+changes by the *difference* of their offsets. A +2 on one column followed by 0
+on the next shortens that gap by 2, and the following gap lengthens by 2 to
+compensate. That is why the loop stays exactly in time.
+
 **The modulator formula exists twice.** `modulatorOffsetTicks` in
 `js/audio-worklet.js` is the authority — it is what you hear.
 `BeatModulator::offset_ticks` in Rust is a line-for-line copy so the UI can draw

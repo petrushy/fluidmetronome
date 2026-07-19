@@ -409,9 +409,14 @@ input[type="number"]::-webkit-inner-spin-button {
   line-height: 1.45;
 }
 
+/* backdrop-filter makes every card its own stacking context, so without an
+   explicit order the later sibling paints over the sound menu once it escapes
+   the sequencer's bounds. */
 .sequencer-card {
   border-radius: 36px;
   padding: 18px;
+  position: relative;
+  z-index: 2;
 }
 
 .modulators-card {
@@ -419,6 +424,8 @@ input[type="number"]::-webkit-inner-spin-button {
   padding: 18px;
   display: grid;
   gap: 14px;
+  position: relative;
+  z-index: 1;
 }
 
 .modulators-header {
@@ -476,16 +483,21 @@ input[type="number"]::-webkit-inner-spin-button {
   margin-left: auto;
 }
 
+/* Deliberately not a scroll container: an overflow value other than `visible`
+   clips absolutely-positioned descendants, which cropped the sound menu on
+   lower instrument rows. Horizontal scrolling lives on .board-scroll instead. */
 .sequencer-scroll {
-  overflow-x: auto;
-  overflow-y: hidden;
   padding-bottom: 6px;
 }
 
 .sequencer-stack {
-  min-width: max-content;
   display: grid;
   gap: 14px;
+}
+
+.board-scroll {
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
 .sequencer-layout {
@@ -746,9 +758,12 @@ input[type="number"]::-webkit-inner-spin-button {
   outline: none;
 }
 
+/* Header and grid are the two rows of this single-column grid, so both stretch
+   to the same width and their columns stay aligned while the board scrolls. */
 .board-shell {
   display: grid;
   gap: 6px;
+  min-width: max-content;
 }
 
 .board-header {

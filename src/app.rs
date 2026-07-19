@@ -846,6 +846,11 @@ pub fn app() -> Html {
                                             }
                                         </div>
 
+                                        // Only the board scrolls sideways. Keeping the label
+                                        // rail outside this container lets the sound menu
+                                        // escape the clipping box, and pins the instrument
+                                        // names while the grid moves.
+                                        <div class="board-scroll">
                                         <div class="board-shell">
                                             <div class="board-header" style={board_columns_style(section_len)}>
                                                 {
@@ -896,6 +901,7 @@ pub fn app() -> Html {
                                                     })
                                                 }
                                             </div>
+                                        </div>
                                         </div>
                                     </div>
                                 }

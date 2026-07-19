@@ -1,4 +1,33 @@
 (function () {
+  // Per-preset level trim. The hand-tuned voice gains drifted about 8x apart
+  // -- bright-click peaked at 0.05 while cowbell hit 0.39 -- which made the
+  // default metronome presets nearly inaudible on laptop speakers. These
+  // factors normalise every preset to roughly the same peak; see
+  // TARGET_PEAK below. Re-measure before changing a voice's gain.
+  const PRESET_TRIM = {
+    "bright-click": 7.0,
+    "soft-click": 5.6,
+    // Noise voices peak stochastically, so these are set from the measured
+    // peak across runs rather than derived from the voice gain.
+    "hihat-closed": 2.05,
+    "hihat-open": 2.55,
+    "cowbell": 0.9,
+    "woodblock": 4.1,
+    "thump": 1.5,
+  };
+
+  // "metronome" is the one preset that takes its voice from the track's
+  // instrument, so it needs a trim per instrument rather than a single value.
+  const METRONOME_TRIM = {
+    "Click": 4.7,
+    "Accent": 7.6,
+    "Low": 1.6,
+  };
+
+  // Peak amplitude each preset aims for before the master gain. Leaves room for
+  // several tracks landing on the same step without slamming the limiter.
+  const TARGET_PEAK = 0.35;
+
   class FluidMetronomeEngine {
     constructor() {
       this.audioContext = null;
@@ -35,7 +64,19 @@
       this.audioContext = new Context({ latencyHint: "interactive" });
       this.masterGain = this.audioContext.createGain();
       this.masterGain.gain.value = 0.7;
-      this.masterGain.connect(this.audioContext.destination);
+
+      // Catches the summed peak when several tracks fire on the same step.
+      // Fast attack and a high ratio make this behave as a limiter rather than
+      // an audible compressor, so single hits pass through untouched.
+      this.masterLimiter = this.audioContext.createDynamicsCompressor();
+      this.masterLimiter.threshold.value = -6;
+      this.masterLimiter.knee.value = 0;
+      this.masterLimiter.ratio.value = 20;
+      this.masterLimiter.attack.value = 0.002;
+      this.masterLimiter.release.value = 0.12;
+
+      this.masterGain.connect(this.masterLimiter);
+      this.masterLimiter.connect(this.audioContext.destination);
       return this.audioContext;
     }
 
@@ -228,7 +269,19 @@
       );
     }
 
-    renderPresetToDestination(context, destination, preset, instrument, note, gainScale, when) {
+    presetTrim(preset, instrument) {
+      if (preset === "metronome" || !preset) {
+        return METRONOME_TRIM[instrument] ?? METRONOME_TRIM.Click;
+      }
+
+      return PRESET_TRIM[preset] ?? 1;
+    }
+
+    renderPresetToDestination(context, destination, preset, instrument, note, rawGainScale, when) {
+      // Applied here rather than at playback so pre-rendered preset buffers
+      // carry the trim too, and both paths stay level-matched.
+      const gainScale = rawGainScale * this.presetTrim(preset, instrument);
+
       switch (preset) {
         case "bright-click":
           this.renderClickVoice(context, destination, { ...this.instrumentSettings("Accent"), gain: 0.22 }, note, gainScale, when);
@@ -502,7 +555,7 @@
           destination,
           {
             frequency: index === 0 ? base : base * (partial / partials[0]),
-            gain: (index === 0 ? 0.14 : 0.1) * gainScale,
+            gain: index === 0 ? 0.14 : 0.1,
             sustain: 0.04,
             attack: 0.001,
             body: 0.01,
@@ -513,7 +566,7 @@
             type: "square",
           },
           note,
-          1,
+          gainScale,
           when,
         );
       });
@@ -525,7 +578,7 @@
         destination,
         {
           frequency: this.noteFrequency(note, 880),
-          gain: 0.16 * gainScale,
+          gain: 0.16,
           sustain: 0.05,
           attack: 0.001,
           body: 0.012,
@@ -536,7 +589,7 @@
           type: "triangle",
         },
         note,
-        1,
+        gainScale,
         when,
       );
     }

@@ -264,6 +264,79 @@ fn unique_pattern_title(desired: &str, patterns: &[PatternEntry]) -> String {
     format!("{base} ({})", next_pattern_id())
 }
 
+const SHAPE_WIDTH: f64 = 128.0;
+const SHAPE_HEIGHT: f64 = 44.0;
+const SHAPE_SAMPLES: usize = 96;
+
+/// Draw one loop of a modulator's curve.
+///
+/// The domain is the pattern's own cycle starting at tick 0, so the diagram
+/// shows what the modulator actually does to this pattern from the loop start,
+/// not an idealised single period. Values come from `BeatModulator::offset_ticks`,
+/// the same arithmetic the worklet runs.
+///
+/// The curve is normalised to the modulator's own amplitude so the shape stays
+/// visible at any depth; the sign is preserved, so a negative amplitude flips
+/// the picture as it flips the timing.
+fn modulator_shape(modulator: &crate::audio::pattern::BeatModulator, cycle_ticks: f64) -> Html {
+    let domain = if cycle_ticks > 0.0 {
+        cycle_ticks
+    } else {
+        modulator.wavelength_ticks.max(1.0)
+    };
+
+    let scale = modulator.amplitude_ticks.abs().max(f64::EPSILON);
+    let mid = SHAPE_HEIGHT / 2.0;
+    let reach = mid - 4.0;
+
+    let mut points = String::with_capacity(SHAPE_SAMPLES * 12);
+    let mut start_y = mid;
+
+    for index in 0..=SHAPE_SAMPLES {
+        let progress = index as f64 / SHAPE_SAMPLES as f64;
+        let tick = progress * domain;
+        let value = modulator.offset_ticks(tick, cycle_ticks);
+        // Plotted the way the function would be on paper: positive up. SVG y
+        // grows downward, hence the subtraction. Sin therefore rises first and
+        // Cos starts at the top, which is what makes the shape recognisable.
+        let y = mid - (value / scale).clamp(-1.0, 1.0) * reach;
+
+        if index == 0 {
+            start_y = y;
+        } else {
+            points.push(' ');
+        }
+
+        points.push_str(&format!("{:.2},{:.2}", progress * SHAPE_WIDTH, y));
+    }
+
+    let label = format!(
+        "{} over {} ticks, amplitude {}",
+        modulator.function.as_label(),
+        format_beats(domain),
+        modulator.amplitude_ticks,
+    );
+
+    html! {
+        <svg
+            class="modulator-shape"
+            // Rnd is seeded from the id, so the curve cannot be reproduced
+            // without it.
+            data-modulator-id={modulator.id.to_string()}
+            viewBox={format!("0 0 {SHAPE_WIDTH} {SHAPE_HEIGHT}")}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label={label.clone()}
+        >
+            <title>{ label }</title>
+            <line class="shape-axis" x1="0" y1={mid.to_string()} x2={SHAPE_WIDTH.to_string()} y2={mid.to_string()} />
+            <polyline class="shape-curve" points={points} />
+            // Marks the value at tick 0, the start of the loop.
+            <circle class="shape-start" cx="0" cy={format!("{start_y:.2}")} r="2.6" />
+        </svg>
+    }
+}
+
 /// Beats per loop, shown whole when the pattern closes on a beat and to two
 /// trimmed decimals when it does not -- which, for uneven rhythms, is normal.
 fn format_beats(beats: f64) -> String {
@@ -1465,7 +1538,8 @@ pub fn app() -> Html {
                                         });
 
                                         html! {
-                                            <div class="modulator-item">
+                                            <div class={classes!("modulator-item", modulator.muted.then_some("is-muted"))}>
+                                                { modulator_shape(modulator, grid.total_ticks() as f64) }
                                                 <label class="control-field modulator-field">
                                                     <span>{ "Function" }</span>
                                                     <select onchange={on_function_change}>

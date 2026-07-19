@@ -210,6 +210,53 @@ pub struct BeatModulator {
 }
 
 impl BeatModulator {
+    /// Offset in ticks this modulator applies at `step_tick`.
+    ///
+    /// This mirrors `modulatorOffsetTicks` in js/audio-worklet.js line for line.
+    /// The worklet is the authority -- it is what you actually hear -- and this
+    /// copy exists so the UI can draw the curve. If the two drift apart the
+    /// diagram starts lying, so `tests/browser/modulator-shape.mjs` checks the
+    /// rendered curve against the worklet's own function.
+    pub fn offset_ticks(&self, step_tick: f64, cycle_ticks: f64) -> f64 {
+        let wavelength = if self.wavelength_ticks.is_finite() && self.wavelength_ticks > 0.0 {
+            self.wavelength_ticks.max(1.0)
+        } else {
+            1.0
+        };
+        let amplitude = if self.amplitude_ticks.is_finite() {
+            self.amplitude_ticks
+        } else {
+            0.0
+        };
+        let phase_degrees = if self.phase_degrees.is_finite() {
+            self.phase_degrees
+        } else {
+            0.0
+        };
+
+        let domain_tick = if self.restart_each_loop && cycle_ticks > 0.0 {
+            step_tick % cycle_ticks
+        } else {
+            step_tick
+        };
+
+        let phase_ticks = (phase_degrees / 360.0) * wavelength;
+        let shifted_tick = domain_tick + phase_ticks;
+        let phase = ((shifted_tick % wavelength) + wavelength) % wavelength;
+        let normalized_phase = phase / wavelength;
+
+        match self.function {
+            BeatModulatorFunction::Cos => amplitude * (normalized_phase * std::f64::consts::TAU).cos(),
+            BeatModulatorFunction::Raise => amplitude * normalized_phase,
+            BeatModulatorFunction::Drop => amplitude * (1.0 - normalized_phase),
+            BeatModulatorFunction::Rnd => {
+                let segment = (shifted_tick / wavelength).floor();
+                amplitude * seeded_unit_value(self.id as f64, segment)
+            }
+            BeatModulatorFunction::Sin => amplitude * (normalized_phase * std::f64::consts::TAU).sin(),
+        }
+    }
+
     pub fn new(id: u64) -> Self {
         Self {
             id,
@@ -221,6 +268,12 @@ impl BeatModulator {
             restart_each_loop: true,
         }
     }
+}
+
+/// Mirrors `seededUnitValue` in js/audio-worklet.js.
+fn seeded_unit_value(seed_a: f64, seed_b: f64) -> f64 {
+    let x = (seed_a * 12.9898 + seed_b * 78.233).sin() * 43758.5453;
+    (x - x.floor()) * 2.0 - 1.0
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -675,6 +728,71 @@ mod tests {
         // An insert past the end clamps rather than panicking.
         grid.insert_step(99, 99);
         assert_eq!(grid.steps.len(), before.steps.len() + 1);
+    }
+
+    fn modulator(function: BeatModulatorFunction) -> BeatModulator {
+        BeatModulator {
+            id: 1,
+            function,
+            amplitude_ticks: 2.0,
+            wavelength_ticks: 16.0,
+            phase_degrees: 0.0,
+            muted: false,
+            restart_each_loop: true,
+        }
+    }
+
+    #[test]
+    fn modulator_values_at_the_loop_start() {
+        // What each function does at tick 0 is the thing the diagram must get
+        // right: Sin and Raise start at zero, Cos and Drop start at full.
+        let cycle = 40.0;
+        assert!((modulator(BeatModulatorFunction::Sin).offset_ticks(0.0, cycle)).abs() < 1e-9);
+        assert!((modulator(BeatModulatorFunction::Cos).offset_ticks(0.0, cycle) - 2.0).abs() < 1e-9);
+        assert!((modulator(BeatModulatorFunction::Raise).offset_ticks(0.0, cycle)).abs() < 1e-9);
+        assert!((modulator(BeatModulatorFunction::Drop).offset_ticks(0.0, cycle) - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn modulator_traces_its_shape_across_a_wavelength() {
+        let cycle = 64.0;
+        let sin = modulator(BeatModulatorFunction::Sin);
+        // Quarter, half, three-quarter points of a 16-tick wavelength.
+        assert!((sin.offset_ticks(4.0, cycle) - 2.0).abs() < 1e-9);
+        assert!((sin.offset_ticks(8.0, cycle)).abs() < 1e-9);
+        assert!((sin.offset_ticks(12.0, cycle) + 2.0).abs() < 1e-9);
+
+        let raise = modulator(BeatModulatorFunction::Raise);
+        assert!((raise.offset_ticks(8.0, cycle) - 1.0).abs() < 1e-9);
+        let drop = modulator(BeatModulatorFunction::Drop);
+        assert!((drop.offset_ticks(8.0, cycle) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn modulator_phase_and_sign_are_honoured() {
+        let cycle = 64.0;
+        let mut shifted = modulator(BeatModulatorFunction::Sin);
+        shifted.phase_degrees = 90.0;
+        // A quarter turn of phase turns sin into cos.
+        assert!((shifted.offset_ticks(0.0, cycle) - 2.0).abs() < 1e-9);
+
+        let mut inverted = modulator(BeatModulatorFunction::Raise);
+        inverted.amplitude_ticks = -2.0;
+        assert!((inverted.offset_ticks(8.0, cycle) + 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn modulator_restart_wraps_on_the_cycle() {
+        let cycle = 40.0;
+        let looping = modulator(BeatModulatorFunction::Raise);
+        // With restart_each_loop the domain wraps at the cycle, so tick 40
+        // behaves as tick 0.
+        assert!((looping.offset_ticks(40.0, cycle) - looping.offset_ticks(0.0, cycle)).abs() < 1e-9);
+
+        let mut free = looping.clone();
+        free.restart_each_loop = false;
+        // 40 % 16 = 8, i.e. halfway up the ramp.
+        assert!((free.offset_ticks(40.0, cycle) - 1.0).abs() < 1e-9);
     }
 
     #[test]

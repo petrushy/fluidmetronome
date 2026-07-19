@@ -43,6 +43,10 @@ cargo check --target wasm32-unknown-unknown
 domain logic in `src/audio/pattern.rs` compiles and tests natively despite the
 yew/web-sys dependencies, so no wasm test harness is needed for model work.
 
+`./build.sh` occasionally prints `error writing JS loader file to stage dir`
+when run immediately after a browser test released `dist/`. It still exits 0 and
+produces correct output; re-running is clean. Check the exit code, not the log.
+
 The browser tests start their own static server against `dist/`, so **rebuild
 before running them** or you will test stale output. This has bitten before:
 a shell left `cd`'d into `dist/` silently skipped `./build.sh`, and a
@@ -79,6 +83,15 @@ remove the main thread from the playback path entirely.
 
 Modulators displace `when` only — `nextStepFrame` advances unmodulated, so
 modulation never accumulates drift. Preserve that.
+
+**The modulator formula exists twice.** `modulatorOffsetTicks` in
+`js/audio-worklet.js` is the authority — it is what you hear.
+`BeatModulator::offset_ticks` in Rust is a line-for-line copy so the UI can draw
+the curve. Change one and you must change the other:
+`tests/browser/modulator-shape.mjs` reads the rendered SVG and compares it
+against the worklet's own function, so a drift fails there rather than shipping
+a diagram that looks authoritative and is wrong. The curve plots positive
+upward, like the function on paper, not "later = down".
 
 **The scheduling loop must always advance.** `while (nextStepFrame < horizon)`
 runs on the audio render thread; a step that fails to move the transport hangs

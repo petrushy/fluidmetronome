@@ -533,6 +533,49 @@ input[type="number"]::-webkit-inner-spin-button {
   background: rgba(255, 255, 255, 0.34);
 }
 
+/* Curve of one loop of the modulator. Height matches the adjacent controls so
+   the row keeps a single baseline. */
+.modulator-shape {
+  flex: 0 0 auto;
+  width: 128px;
+  height: 48px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.5);
+  overflow: visible;
+}
+
+.shape-axis {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.shape-curve {
+  fill: none;
+  stroke: var(--accent-strong);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  /* preserveAspectRatio="none" stretches the viewBox, which would otherwise
+     stretch the stroke with it. */
+  vector-effect: non-scaling-stroke;
+}
+
+.shape-start {
+  fill: var(--accent-warm);
+}
+
+.modulator-item.is-muted .shape-curve {
+  stroke: var(--muted);
+  opacity: 0.5;
+}
+
+.modulator-item.is-muted .shape-start {
+  fill: var(--muted);
+}
+
 .modulator-field {
   min-width: 140px;
 }

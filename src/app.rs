@@ -1,5 +1,6 @@
 use crate::audio::pattern::{
     title_slug, BeatModulatorFunction, InstrumentKind, PatternFile, RhythmGrid,
+    MAX_TICKS_PER_BEAT, MIN_TICKS_PER_BEAT,
 };
 use crate::audio::playback;
 use crate::audio::playback::{TimingHealth, TimingStatus};
@@ -263,9 +264,49 @@ fn unique_pattern_title(desired: &str, patterns: &[PatternEntry]) -> String {
     format!("{base} ({})", next_pattern_id())
 }
 
+/// Beats per loop, shown whole when the pattern closes on a beat and to two
+/// trimmed decimals when it does not -- which, for uneven rhythms, is normal.
+fn format_beats(beats: f64) -> String {
+    if (beats - beats.round()).abs() < 1e-9 {
+        return format!("{}", beats.round() as i64);
+    }
+
+    let text = format!("{beats:.2}");
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
 fn next_pattern_name(pattern_count: usize) -> String {
     format!("Pattern {}", pattern_count + 1)
 }
+
+/// A `<select>` ignores a `value` attribute -- the chosen option is marked with
+/// `selected` on the option itself. Binding these lists keeps that in one place.
+const TICKS_PER_BEAT_OPTIONS: [u8; 6] = [4, 6, 8, 12, 16, 32];
+
+/// Accept a typed mini-ticks/beat entry, or `None` when it is not yet a usable
+/// number ("", "-", "0", "abc") so partial input is never treated as a value.
+///
+/// "7." parses as 7.0 and is accepted; the draft text keeps showing "7." so the
+/// decimals can still be typed.
+fn parse_ticks_per_beat(text: &str) -> Option<f64> {
+    let value = text.trim().parse::<f64>().ok()?;
+    if !value.is_finite() || value <= 0.0 {
+        return None;
+    }
+
+    Some(value.clamp(MIN_TICKS_PER_BEAT, MAX_TICKS_PER_BEAT))
+}
+
+/// Show a whole number without a trailing ".0", and a fraction as typed.
+fn format_ticks_per_beat(value: f64) -> String {
+    if (value - value.round()).abs() < 1e-9 {
+        return format!("{}", value.round() as i64);
+    }
+
+    format!("{value}")
+}
+
+const MODULATOR_FUNCTIONS: [&str; 5] = ["Sin", "Cos", "Raise", "Drop", "Rnd"];
 
 const SOUND_PRESETS: [(&str, &str); 8] = [
     ("metronome", "Metronome"),
@@ -484,6 +525,7 @@ pub fn app() -> Html {
     let column_menu = use_state(|| Option::<ColumnMenu>::None);
     // Some(draft) while the pattern name is being edited.
     let renaming = use_state(|| Option::<String>::None);
+    let ticks_draft = use_state(|| Option::<String>::None);
 
     let current_pattern = pattern_library.current_pattern().clone();
     let grid = current_pattern.grid.clone();
@@ -728,16 +770,31 @@ pub fn app() -> Html {
         })
     };
 
+    // While the field is being typed in, the raw text is held here. Without it,
+    // each re-render would rewrite the input from the model and an intermediate
+    // value like "7." could never be typed.
     let on_ticks_per_beat_input = {
         let pattern_library = pattern_library.clone();
-        Callback::from(move |event: Event| {
-            let input: HtmlSelectElement = event.target_unchecked_into();
-            if let Ok(value) = input.value().parse::<u8>() {
+        let ticks_draft = ticks_draft.clone();
+        Callback::from(move |event: InputEvent| {
+            let input: HtmlInputElement = event.target_unchecked_into();
+            let text = input.value();
+
+            if let Some(value) = parse_ticks_per_beat(&text) {
                 let mut next = (*pattern_library).clone();
-                next.current_pattern_mut().grid.ticks_per_beat = value.max(1);
+                next.current_pattern_mut().grid.ticks_per_beat = value;
                 pattern_library.set(next);
             }
+
+            ticks_draft.set(Some(text));
         })
+    };
+
+    // On leaving the field, drop the draft so the display returns to the value
+    // actually in use -- which also shows the clamp if the entry was out of range.
+    let on_ticks_per_beat_blur = {
+        let ticks_draft = ticks_draft.clone();
+        Callback::from(move |_: FocusEvent| ticks_draft.set(None))
     };
 
     let on_add_step = {
@@ -933,9 +990,12 @@ pub fn app() -> Html {
                 } else {
                     <label class="control-field pattern-select-field">
                         <span>{ "Pattern" }</span>
-                        <select onchange={on_pattern_select} value={current_pattern.id.clone()}>
+                        <select onchange={on_pattern_select}>
                             { for pattern_library.patterns.iter().map(|pattern| html! {
-                                <option value={pattern.id.clone()}>{ &pattern.title }</option>
+                                <option
+                                    value={pattern.id.clone()}
+                                    selected={pattern.id == current_pattern.id}
+                                >{ &pattern.title }</option>
                             })}
                         </select>
                     </label>
@@ -959,18 +1019,42 @@ pub fn app() -> Html {
                 <TempoWheel bpm={grid.bpm} on_change={on_bpm_change} />
                 <label class="control-field">
                     <span>{ "Mini-ticks / beat" }</span>
-                    <select onchange={on_ticks_per_beat_input} value={grid.ticks_per_beat.to_string()}>
-                        <option value="4">{ "4" }</option>
-                        <option value="6">{ "6" }</option>
-                        <option value="8">{ "8" }</option>
-                        <option value="12">{ "12" }</option>
-                        <option value="16">{ "16" }</option>
-                        <option value="32">{ "32" }</option>
-                    </select>
+                    <input
+                        class="ticks-input"
+                        type="number"
+                        inputmode="decimal"
+                        step="any"
+                        min="0.01"
+                        max="512"
+                        list="ticks-per-beat-options"
+                        value={(*ticks_draft).clone().unwrap_or_else(|| format_ticks_per_beat(grid.ticks_per_beat))}
+                        oninput={on_ticks_per_beat_input}
+                        onblur={on_ticks_per_beat_blur}
+                    />
+                    <datalist id="ticks-per-beat-options">
+                        { for TICKS_PER_BEAT_OPTIONS.iter().map(|ticks| html! {
+                            <option value={ticks.to_string()}></option>
+                        })}
+                    </datalist>
                 </label>
                 <button class="secondary-button" onclick={on_add_step}>{ "Add Column" }</button>
                 <button class="secondary-button" onclick={on_remove_step}>{ "Remove Column" }</button>
                 <button class="secondary-button" onclick={on_add_track}>{ "Add Instrument" }</button>
+
+                <dl class="pattern-stats">
+                    <div class="pattern-stat">
+                        <dt>{ "Columns" }</dt>
+                        <dd>{ grid.step_count() }</dd>
+                    </div>
+                    <div class="pattern-stat">
+                        <dt>{ "Mini-ticks" }</dt>
+                        <dd>{ grid.total_ticks() }</dd>
+                    </div>
+                    <div class="pattern-stat">
+                        <dt>{ "Full beats" }</dt>
+                        <dd>{ format_beats(grid.total_beats()) }</dd>
+                    </div>
+                </dl>
             </section>
 
             <section class="sequencer-card">
@@ -1384,12 +1468,13 @@ pub fn app() -> Html {
                                             <div class="modulator-item">
                                                 <label class="control-field modulator-field">
                                                     <span>{ "Function" }</span>
-                                                    <select onchange={on_function_change} value={modulator.function.as_label()}>
-                                                        <option value="Sin">{ "Sin" }</option>
-                                                        <option value="Cos">{ "Cos" }</option>
-                                                        <option value="Raise">{ "Raise" }</option>
-                                                        <option value="Drop">{ "Drop" }</option>
-                                                        <option value="Rnd">{ "Rnd" }</option>
+                                                    <select onchange={on_function_change}>
+                                                        { for MODULATOR_FUNCTIONS.iter().map(|label| html! {
+                                                            <option
+                                                                value={*label}
+                                                                selected={modulator.function.as_label() == *label}
+                                                            >{ *label }</option>
+                                                        })}
                                                     </select>
                                                 </label>
 
@@ -1432,5 +1517,47 @@ pub fn app() -> Html {
 
             { column_menu_view }
         </main>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ticks_per_beat_accepts_floats_and_clamps() {
+        assert_eq!(parse_ticks_per_beat("8"), Some(8.0));
+        assert_eq!(parse_ticks_per_beat("7.5"), Some(7.5));
+        assert_eq!(parse_ticks_per_beat("  6.25 "), Some(6.25));
+        assert_eq!(parse_ticks_per_beat("100000"), Some(MAX_TICKS_PER_BEAT));
+        assert_eq!(parse_ticks_per_beat("0.0001"), Some(MIN_TICKS_PER_BEAT));
+    }
+
+    #[test]
+    fn ticks_per_beat_rejects_entries_that_are_not_usable_numbers() {
+        for text in ["", "  ", "-", "-4", "0", "abc", "NaN", "inf"] {
+            assert_eq!(parse_ticks_per_beat(text), None, "should reject {text:?}");
+        }
+    }
+
+    #[test]
+    fn ticks_per_beat_accepts_a_trailing_decimal_point() {
+        // "7." is a stage of typing "7.5". It commits 7.0 while the draft text
+        // keeps the point visible, so the decimals can still be entered.
+        assert_eq!(parse_ticks_per_beat("7."), Some(7.0));
+    }
+
+    #[test]
+    fn ticks_per_beat_displays_without_a_trailing_zero() {
+        assert_eq!(format_ticks_per_beat(8.0), "8");
+        assert_eq!(format_ticks_per_beat(7.5), "7.5");
+        assert_eq!(format_ticks_per_beat(6.25), "6.25");
+    }
+
+    #[test]
+    fn beats_format_trims_trailing_zeros() {
+        assert_eq!(format_beats(5.0), "5");
+        assert_eq!(format_beats(4.875), "4.88");
+        assert_eq!(format_beats(4.5), "4.5");
     }
 }

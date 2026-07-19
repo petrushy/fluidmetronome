@@ -113,7 +113,11 @@ pub const MIN_DELAY_TICKS: u8 = 1;
 pub const DEFAULT_DELAY_TICKS: u8 = 8;
 pub const MIN_BPM: u16 = 30;
 pub const MAX_BPM: u16 = 280;
-pub const MIN_TICKS_PER_BEAT: u8 = 1;
+/// Mini-ticks per beat is a float so unusual subdivisions can be typed
+/// directly. It only has to stay finite and positive; the transport divides by it.
+pub const MIN_TICKS_PER_BEAT: f64 = 0.01;
+pub const MAX_TICKS_PER_BEAT: f64 = 512.0;
+pub const DEFAULT_TICKS_PER_BEAT: f64 = 8.0;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
@@ -223,7 +227,7 @@ impl BeatModulator {
 pub struct RhythmGrid {
     pub title: String,
     pub bpm: u16,
-    pub ticks_per_beat: u8,
+    pub ticks_per_beat: f64,
     pub steps: Vec<Step>,
     pub tracks: Vec<Track>,
     #[serde(default)]
@@ -238,7 +242,7 @@ impl RhythmGrid {
         Self {
             title: title.into(),
             bpm: 108,
-            ticks_per_beat: 8,
+            ticks_per_beat: DEFAULT_TICKS_PER_BEAT,
             steps,
             tracks: vec![default_track("Pulse", InstrumentKind::Click, step_count), default_track("Accent", InstrumentKind::Accent, step_count)],
             modulators: Vec::new(),
@@ -269,7 +273,7 @@ impl RhythmGrid {
         Self {
             title: "Värmland Groove".into(),
             bpm: 108,
-            ticks_per_beat: 8,
+            ticks_per_beat: DEFAULT_TICKS_PER_BEAT,
             steps,
             tracks: vec![pulse, accent],
             modulators: Vec::new(),
@@ -284,7 +288,11 @@ impl RhythmGrid {
     /// reaches the transport.
     pub fn sanitize(&mut self) {
         self.bpm = self.bpm.clamp(MIN_BPM, MAX_BPM);
-        self.ticks_per_beat = self.ticks_per_beat.max(MIN_TICKS_PER_BEAT);
+        self.ticks_per_beat = if self.ticks_per_beat.is_finite() {
+            self.ticks_per_beat.clamp(MIN_TICKS_PER_BEAT, MAX_TICKS_PER_BEAT)
+        } else {
+            DEFAULT_TICKS_PER_BEAT
+        };
 
         if self.steps.is_empty() {
             self.steps.push(Step::new(DEFAULT_DELAY_TICKS));
@@ -304,6 +312,21 @@ impl RhythmGrid {
 
     pub fn step_count(&self) -> usize {
         self.steps.len()
+    }
+
+    /// Length of one loop in mini-ticks -- the sum of every column's spacing.
+    pub fn total_ticks(&self) -> u32 {
+        self.steps
+            .iter()
+            .map(|step| u32::from(step.delay_ticks))
+            .sum()
+    }
+
+    /// Length of one loop in beats. Fractional by design: an uneven pattern is
+    /// under no obligation to close on a whole beat.
+    pub fn total_beats(&self) -> f64 {
+        let per_beat = self.ticks_per_beat.max(MIN_TICKS_PER_BEAT);
+        f64::from(self.total_ticks()) / per_beat
     }
 
     pub fn add_step(&mut self, delay_ticks: u8) {
@@ -652,6 +675,23 @@ mod tests {
         // An insert past the end clamps rather than panicking.
         grid.insert_step(99, 99);
         assert_eq!(grid.steps.len(), before.steps.len() + 1);
+    }
+
+    #[test]
+    fn totals_describe_one_loop() {
+        let grid = RhythmGrid::demo();
+        // The demo groove is 8 5 7 8 4 8 at 8 ticks per beat.
+        assert_eq!(grid.step_count(), 6);
+        assert_eq!(grid.total_ticks(), 40);
+        assert!((grid.total_beats() - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn total_beats_may_be_fractional() {
+        let mut grid = RhythmGrid::demo();
+        grid.set_step_delay(0, 7);
+        assert_eq!(grid.total_ticks(), 39);
+        assert!((grid.total_beats() - 4.875).abs() < 1e-9);
     }
 
     #[test]

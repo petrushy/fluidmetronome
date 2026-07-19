@@ -15,7 +15,11 @@
   --radius-xl: 32px;
   --radius-lg: 24px;
   --radius-md: 18px;
-  --matrix-row-height: 58px;
+  /* Drives both .board-grid rows and .label-rail rows; they must stay equal.
+     70px is the smallest value that fits the label content (name + sound
+     pill) without clipping, and it lifts the grid cells nearer a usable
+     touch target. */
+  --matrix-row-height: 70px;
 }
 
 * {
@@ -507,10 +511,19 @@ input[type="number"]::-webkit-inner-spin-button {
   align-items: start;
 }
 
+/* The rail must advance in exactly the same pitch as .board-grid or the labels
+   drift away from their rows, one gap per track. The grid uses no row gap, so
+   neither can this: the heading offset is carried by a margin instead, matching
+   .board-shell's 6px gap between its header and grid. */
 .label-rail {
   display: grid;
-  grid-template-rows: 48px repeat(auto-fit, minmax(var(--matrix-row-height), auto));
-  gap: 6px;
+  /* 48px heading + 6px .board-shell gap + 1px .board-grid border, so rail row N
+     starts exactly where grid row N does. A margin on the heading cannot do
+     this: the track is a fixed size, so the margin shrinks the item inside it
+     rather than displacing the rows below. */
+  grid-template-rows: 55px;
+  grid-auto-rows: var(--matrix-row-height);
+  gap: 0;
   padding-top: 0;
 }
 
@@ -528,10 +541,13 @@ input[type="number"]::-webkit-inner-spin-button {
   font-weight: 500;
   padding: 0 4px;
   opacity: 0.85;
+  align-self: start;
+  height: 48px;
 }
 
 .label-row {
-  min-height: var(--matrix-row-height);
+  min-height: 0;
+  height: 100%;
   align-self: stretch;
 }
 
@@ -543,7 +559,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .instrument-name {
-  min-height: var(--matrix-row-height);
+  min-height: 0;
   height: 100%;
   padding: 4px 10px;
   display: grid;

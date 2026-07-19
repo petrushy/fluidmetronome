@@ -1,0 +1,25 @@
+{
+  "name": "fluidmetronome",
+  "version": "1.0.0",
+  "description": "Starter template for a Progressive Web App metronome aimed at uneven rhythmic structures common in Swedish folk traditions, including patterns built from variable step lengths rather than only uniform beats.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/petrushy/fluidmetronome.git"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/petrushy/fluidmetronome/issues"
+  },
+  "homepage": "https://github.com/petrushy/fluidmetronome#readme",
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}

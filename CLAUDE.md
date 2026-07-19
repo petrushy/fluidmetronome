@@ -93,11 +93,15 @@ files (`PatternFile::from_json` calls it), and Firestore once sync lands.
 
 ### Pattern files
 
-`PatternFile` in `src/audio/pattern.rs` is the export envelope — a `format`
-marker, a `version`, and a list of grids, so "export everything" needs no new
-format. Import also accepts a bare `RhythmGrid` so a hand-edited file still
-loads, rejects foreign or newer-versioned files, and never replaces the library:
-imported patterns are appended with a disambiguated title.
+`PatternFile` in `src/audio/pattern.rs` is the export envelope: a `format`
+marker, a `version`, and **one** `pattern`. Export is scoped to the selected
+pattern only, and the singular key keeps the file honest about that — an earlier
+`"patterns": [...]` array read as if the whole library were inside.
+
+Import is deliberately more lenient than export: it accepts the singular form, a
+`patterns` list, or a bare `RhythmGrid` (so a hand-edited file still loads). It
+rejects foreign or newer-versioned files, and never replaces the library —
+patterns are appended, with a `(2)` suffix when the title already exists.
 
 `src/file_io.rs` holds the browser glue. Saving text needs a Blob URL and a
 synthetic anchor click — there is no "save this string" API — and the object URL

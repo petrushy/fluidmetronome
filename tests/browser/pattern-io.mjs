@@ -61,14 +61,15 @@ try {
 if (parsed) {
   check("export carries a versioned envelope",
     parsed.format === "fluidmetronome.patterns" && parsed.version === 1);
+  check("export holds one pattern, not a list",
+    parsed.pattern !== undefined && parsed.patterns === undefined,
+    Object.keys(parsed).join(","));
   check("export contains the current pattern",
-    Array.isArray(parsed.patterns) && parsed.patterns.length === 1 &&
-      parsed.patterns[0].title === "Värmland Groove",
-    parsed.patterns?.[0]?.title);
+    parsed.pattern?.title === "Värmland Groove", parsed.pattern?.title);
   check("export preserves uneven spacing",
-    JSON.stringify(parsed.patterns[0].steps.map((s) => String(s.delay_ticks))) ===
+    JSON.stringify(parsed.pattern.steps.map((s) => String(s.delay_ticks))) ===
       JSON.stringify(before.delays),
-    `${parsed.patterns[0].steps.map((s) => s.delay_ticks)} vs ${before.delays}`);
+    `${parsed.pattern.steps.map((s) => s.delay_ticks)} vs ${before.delays}`);
 }
 
 // --- import the file we just wrote ---
@@ -88,7 +89,7 @@ check("import reports no error", after.error === null, after.error ?? "");
 
 // --- a bare grid (hand-edited) should still import ---
 const bare = join(work, "bare.json");
-await writeFile(bare, JSON.stringify(parsed.patterns[0]), "utf8");
+await writeFile(bare, JSON.stringify(parsed.pattern), "utf8");
 const beforeBare = await readState();
 await page.setInputFiles('.file-button input[type="file"]', bare);
 await page.waitForTimeout(400);
@@ -113,13 +114,13 @@ const hostile = join(work, "hostile.json");
 await writeFile(hostile, JSON.stringify({
   format: "fluidmetronome.patterns",
   version: 1,
-  patterns: [{
+  pattern: {
     title: "Hostile", bpm: 0, ticks_per_beat: 0,
     steps: [{ delay_ticks: 0 }, { delay_ticks: 4 }],
     tracks: [{ name: "P", instrument: "Click", note: "C4",
                sound_preset: "metronome", step_velocities: [3, 3] }],
     modulators: [],
-  }],
+  },
 }), "utf8");
 await page.setInputFiles('.file-button input[type="file"]', hostile);
 await page.waitForTimeout(400);

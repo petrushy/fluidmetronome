@@ -657,11 +657,30 @@ mod tests {
     #[test]
     fn pattern_file_round_trips() {
         let grid = RhythmGrid::demo();
-        let json = PatternFile::new(vec![grid.clone()]).to_json().unwrap();
+        let json = PatternFile::new(grid.clone()).to_json().unwrap();
         let back = PatternFile::from_json(&json).unwrap();
 
         assert_eq!(back.len(), 1);
         assert!(back[0] == grid);
+    }
+
+    #[test]
+    fn export_writes_a_single_pattern_not_a_list() {
+        let json = PatternFile::new(RhythmGrid::demo()).to_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert!(value.get("pattern").is_some(), "file should hold one `pattern`");
+        assert!(value.get("patterns").is_none(), "file should not look like a list");
+    }
+
+    #[test]
+    fn pattern_file_still_reads_a_patterns_list() {
+        let json = format!(
+            r#"{{"format":"{PATTERN_FILE_FORMAT}","version":1,"patterns":[{}]}}"#,
+            serde_json::to_string(&RhythmGrid::demo()).unwrap()
+        );
+
+        assert_eq!(PatternFile::from_json(&json).unwrap().len(), 1);
     }
 
     #[test]
@@ -726,23 +745,37 @@ mod tests {
 pub const PATTERN_FILE_FORMAT: &str = "fluidmetronome.patterns";
 pub const PATTERN_FILE_VERSION: u32 = 1;
 
-/// On-disk envelope for exported patterns.
+/// On-disk envelope for an exported pattern.
 ///
-/// Versioned from the start so a later format change can still read these, and
-/// a list rather than a single grid so "export everything" needs no new format.
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+/// Export writes exactly one pattern -- the selected one -- so the file holds a
+/// single `pattern`, not a list. A plural key would misdescribe the file to
+/// anyone who opens it.
+#[derive(Clone, PartialEq, Serialize)]
 pub struct PatternFile {
     pub format: String,
     pub version: u32,
-    pub patterns: Vec<RhythmGrid>,
+    pub pattern: RhythmGrid,
+}
+
+/// Reading side, kept separate so import can stay lenient about shape while
+/// export stays exact.
+#[derive(Deserialize)]
+struct PatternFileIn {
+    format: String,
+    version: u32,
+    #[serde(default)]
+    pattern: Option<RhythmGrid>,
+    /// Accepted so a file holding several patterns still imports.
+    #[serde(default)]
+    patterns: Option<Vec<RhythmGrid>>,
 }
 
 impl PatternFile {
-    pub fn new(patterns: Vec<RhythmGrid>) -> Self {
+    pub fn new(pattern: RhythmGrid) -> Self {
         Self {
             format: PATTERN_FILE_FORMAT.into(),
             version: PATTERN_FILE_VERSION,
-            patterns,
+            pattern,
         }
     }
 
@@ -756,7 +789,7 @@ impl PatternFile {
     /// Every grid is sanitised here: this is untrusted input arriving from
     /// outside the editor's clamps, exactly like localStorage and Firestore.
     pub fn from_json(payload: &str) -> Result<Vec<RhythmGrid>, String> {
-        let mut patterns = if let Ok(file) = serde_json::from_str::<PatternFile>(payload) {
+        let mut patterns = if let Ok(file) = serde_json::from_str::<PatternFileIn>(payload) {
             if file.format != PATTERN_FILE_FORMAT {
                 return Err(format!("Not a Fluid Metronome pattern file ({}).", file.format));
             }
@@ -768,7 +801,11 @@ impl PatternFile {
                 ));
             }
 
-            file.patterns
+            match (file.pattern, file.patterns) {
+                (Some(pattern), _) => vec![pattern],
+                (None, Some(patterns)) => patterns,
+                (None, None) => Vec::new(),
+            }
         } else if let Ok(grid) = serde_json::from_str::<RhythmGrid>(payload) {
             vec![grid]
         } else {

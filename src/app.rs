@@ -568,7 +568,8 @@ pub fn app() -> Html {
         let audio_error = audio_error.clone();
         Callback::from(move |_| {
             let current = pattern_library.current_pattern();
-            let file = PatternFile::new(vec![current.grid.clone()]);
+            // Only the selected pattern, never the whole library.
+            let file = PatternFile::new(current.grid.clone());
 
             let result = file.to_json().and_then(|json| {
                 crate::file_io::download_text(

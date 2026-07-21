@@ -205,8 +205,21 @@ change, the phone needs the PWA deleted and re-added once. Say so.
 engine can stop itself (worklet stall, iOS AudioContext suspension, an async
 worklet-load failure where `start()` already returned `true`). There is no
 JS→Rust "stopped" channel, so the 250ms `timing_status` poll in `src/app.rs`
-treats a JS-reported `Idle` while `is_playing` as authoritative and flips the
-button back. `tests/browser/transport-recovery.mjs` forces the divergence.
+treats a JS-reported `Idle` as authoritative and flips the button back.
+`tests/browser/transport-recovery.mjs` forces the self-stop divergence;
+`tests/browser/transport-button-stop.mjs` covers the manual-stop path.
+
+`Unknown` state (no trigger for >1200 ms) is also treated as stopped after
+six consecutive Unknown polls (~1.5 s). This handles the iOS case where the
+AudioContext never resumes and the worklet never runs, so no `stalled` message
+is ever posted. `timingSnapshot()` in `js/audio-engine.js` additionally returns
+`idle` (not `unknown`) when `isRunning` is true but the AudioContext is
+`suspended`, as a faster signal for that same scenario.
+
+A `manual_stop` flag in `src/app.rs` distinguishes the two recovery paths: the
+"engine stopped on its own" error is shown only when the user did NOT click Stop,
+preventing the confusing message that appeared when the polling interval fired
+one last time after a manual stop and saw the newly-idle engine.
 
 **Inline SVGs need explicit `width`/`height`, not just a `viewBox`.** A
 width-less `<svg>` as a flex item collapses to zero in iOS WebKit — this hid the

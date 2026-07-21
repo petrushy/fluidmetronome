@@ -697,6 +697,9 @@ pub fn app() -> Html {
     // Some(draft) while the pattern name is being edited.
     let renaming = use_state(|| Option::<String>::None);
     let ticks_draft = use_state(|| Option::<String>::None);
+    // True when the user explicitly clicked Stop, so the poll-based recovery
+    // path knows not to show the "engine stopped on its own" error.
+    let manual_stop = use_mut_ref(|| false);
 
     let current_pattern = pattern_library.current_pattern().clone();
     let grid = current_pattern.grid.clone();
@@ -732,39 +735,57 @@ pub fn app() -> Html {
         let is_playing = is_playing.clone();
         let timing_status = timing_status.clone();
         let audio_error = audio_error.clone();
+        let manual_stop = manual_stop.clone();
         use_effect_with(*is_playing, move |playing| {
             let interval = if !*playing {
                 timing_status.set(TimingStatus::default());
                 None
             } else {
-                // The JS engine can stop on its own -- a worklet stall, or an
-                // async start failure on iOS where start() returned true before
-                // the worklet failed to load. It reports that as Idle here, and
-                // nothing else would ever reset the button. Treat Idle-while-
-                // playing as an authoritative "it stopped" and flip the state
-                // back so the button returns to Start.
-                let sync_state = move |status: &TimingStatus,
-                                       is_playing: &UseStateHandle<bool>,
-                                       audio_error: &UseStateHandle<Option<String>>| {
-                    if status.state == TimingHealth::Idle {
-                        is_playing.set(false);
-                        audio_error
-                            .set(Some("Playback stopped — the audio engine could not keep running.".into()));
-                        true
-                    } else {
-                        false
-                    }
-                };
+                // Clear the flag so that if the engine stops on its own (not via
+                // the Stop button), the recovery message is shown.
+                *manual_stop.borrow_mut() = false;
 
+                // Count consecutive Unknown polls. "Unknown" means no timing
+                // triggers have arrived for >1200 ms — which happens when the
+                // AudioContext is suspended (iOS) or the worklet is silently
+                // stuck. After ~1.5 s of Unknown the button must reset, because
+                // the stall message path cannot fire if the worklet never ran.
+                let unknown_polls = std::rc::Rc::new(std::cell::Cell::new(0u8));
+
+                // Immediate snapshot so the timing pill updates right away.
                 if let Ok(status) = playback::timing_status() {
-                    if !sync_state(&status, &is_playing, &audio_error) {
+                    if status.state != TimingHealth::Idle {
                         timing_status.set(status);
                     }
                 }
 
                 Some(Interval::new(250, move || {
                     if let Ok(status) = playback::timing_status() {
-                        if !sync_state(&status, &is_playing, &audio_error) {
+                        let should_stop = match status.state {
+                            TimingHealth::Idle => {
+                                unknown_polls.set(0);
+                                true
+                            }
+                            TimingHealth::Unknown => {
+                                let count = unknown_polls.get().saturating_add(1);
+                                unknown_polls.set(count);
+                                count >= 6
+                            }
+                            _ => {
+                                unknown_polls.set(0);
+                                false
+                            }
+                        };
+
+                        if should_stop {
+                            playback::stop();
+                            is_playing.set(false);
+                            if !*manual_stop.borrow() {
+                                audio_error.set(Some(
+                                    "Playback stopped — the audio engine could not keep running.".into(),
+                                ));
+                            }
+                        } else {
                             timing_status.set(status);
                         }
                     }
@@ -1037,8 +1058,10 @@ pub fn app() -> Html {
         let grid = grid.clone();
         let is_playing = is_playing.clone();
         let audio_error = audio_error.clone();
+        let manual_stop = manual_stop.clone();
         Callback::from(move |_| {
             if *is_playing {
+                *manual_stop.borrow_mut() = true;
                 playback::stop();
                 audio_error.set(None);
                 is_playing.set(false);

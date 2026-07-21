@@ -187,7 +187,10 @@
       const snapshot = { ...this.timingStatus };
       if (this.isRunning && this.audioContext) {
         const ageMs = performance.now() - snapshot.checked_at_ms;
-        if (ageMs > 1200) {
+        if (ageMs > 1200 && this.audioContext.state === "suspended") {
+          // AudioContext stayed suspended despite start() — worklet is not running.
+          snapshot.state = "idle";
+        } else if (ageMs > 1200) {
           snapshot.state = "unknown";
         } else if (snapshot.late_hits > 0 || (snapshot.latest_lead_ms ?? 999) < 2) {
           snapshot.state = "late";

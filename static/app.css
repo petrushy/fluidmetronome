@@ -88,11 +88,22 @@ select {
 button {
   border: 0;
   cursor: pointer;
+  /* Remove iOS Safari's ~300ms tap delay and its double-tap-zoom association,
+     which can otherwise swallow a tap on a control. */
+  touch-action: manipulation;
 }
 
 input,
 select {
   appearance: none;
+  touch-action: manipulation;
+}
+
+/* Labels that act as controls (file pickers, the restart toggle, the sound
+   menu summary) also need to respond to a plain tap. */
+label,
+summary {
+  touch-action: manipulation;
 }
 
 input[type="number"] {
@@ -626,6 +637,17 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .modulator-item.is-muted .shape-start {
   fill: var(--muted);
+}
+
+/* Make the muted state unmistakable: dim the whole row's fields and graph, so
+   the change is obvious even where the button-label change alone is easy to
+   miss. The actions row is left at full opacity so Unmute stays legible.
+   (opacity is set per-child rather than on .modulator-item, since a parent's
+   opacity cannot be undone by a child.) */
+.modulator-item.is-muted .modulator-field,
+.modulator-item.is-muted .modulator-toggle,
+.modulator-item.is-muted .modulator-shape {
+  opacity: 0.45;
 }
 
 .modulator-field {

@@ -7,6 +7,7 @@ use crate::audio::playback::{TimingHealth, TimingStatus};
 use gloo::timers::callback::Interval;
 use js_sys::{Date, Math};
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{Element, HtmlInputElement, HtmlSelectElement};
 use yew::prelude::*;
@@ -187,36 +188,70 @@ struct ColumnMenu {
 /// Matches .column-menu's min-width; used to keep the menu on screen.
 const COLUMN_MENU_WIDTH: f64 = 200.0;
 const COLUMN_MENU_MARGIN: f64 = 12.0;
+/// Upper bound on the menu's rendered height (title + 5 items + padding), used
+/// to keep it fully on screen. `.column-menu` caps its height to match.
+const COLUMN_MENU_MAX_HEIGHT: f64 = 260.0;
 
 /// Place the menu next to its button without letting it leave the viewport.
 ///
 /// The menu is fixed-position, so anything pushed off screen stays off screen
 /// -- scrolling will not bring it back. Below the midpoint it therefore opens
 /// upward instead of downward.
+/// Read the viewport the menu is actually laid out against. On iOS `position:
+/// fixed` and `getBoundingClientRect` share the *visual* viewport, so prefer
+/// `window.visualViewport` and fall back to `innerWidth/Height`.
+fn viewport_size() -> (f64, f64) {
+    let window = match web_sys::window() {
+        Some(window) => window,
+        None => return (1024.0, 768.0),
+    };
+
+    let from_visual = js_sys::Reflect::get(&window, &JsValue::from_str("visualViewport"))
+        .ok()
+        .filter(|vv| !vv.is_undefined() && !vv.is_null())
+        .and_then(|vv| {
+            let read = |key: &str| {
+                js_sys::Reflect::get(&vv, &JsValue::from_str(key))
+                    .ok()
+                    .and_then(|v| v.as_f64())
+            };
+            match (read("width"), read("height")) {
+                (Some(w), Some(h)) if w > 0.0 && h > 0.0 => Some((w, h)),
+                _ => None,
+            }
+        });
+
+    from_visual.unwrap_or_else(|| {
+        let w = window.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(1024.0);
+        let h = window.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(768.0);
+        (w, h)
+    })
+}
+
 fn column_menu_style(rect: &web_sys::DomRect) -> String {
-    let window = web_sys::window();
-    let viewport_width = window
-        .as_ref()
-        .and_then(|w| w.inner_width().ok())
-        .and_then(|v| v.as_f64())
-        .unwrap_or(1024.0);
-    let viewport_height = window
-        .as_ref()
-        .and_then(|w| w.inner_height().ok())
-        .and_then(|v| v.as_f64())
-        .unwrap_or(768.0);
+    let (viewport_width, viewport_height) = viewport_size();
 
     let left = rect
         .left()
         .min(viewport_width - COLUMN_MENU_WIDTH - COLUMN_MENU_MARGIN)
         .max(COLUMN_MENU_MARGIN);
 
-    if rect.bottom() > viewport_height * 0.55 {
-        let bottom = (viewport_height - rect.top() + 6.0).max(COLUMN_MENU_MARGIN);
-        format!("left: {left}px; bottom: {bottom}px;")
+    // Prefer opening below the button; flip above if it would overflow the
+    // bottom; then clamp so the menu is always fully on screen. Anchoring by a
+    // clamped `top` (rather than `bottom`) keeps a tall menu from sliding off
+    // the top edge on a short iOS viewport. CSS caps the height to match.
+    let below = rect.bottom() + 6.0;
+    let above = rect.top() - COLUMN_MENU_MAX_HEIGHT - 6.0;
+    let mut top = if below + COLUMN_MENU_MAX_HEIGHT + COLUMN_MENU_MARGIN <= viewport_height {
+        below
     } else {
-        format!("left: {left}px; top: {}px;", rect.bottom() + 6.0)
-    }
+        above
+    };
+
+    let max_top = (viewport_height - COLUMN_MENU_MAX_HEIGHT - COLUMN_MENU_MARGIN).max(COLUMN_MENU_MARGIN);
+    top = top.clamp(COLUMN_MENU_MARGIN, max_top);
+
+    format!("left: {left}px; top: {top}px;")
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -284,6 +319,14 @@ fn unique_pattern_title(desired: &str, patterns: &[PatternEntry]) -> String {
 const SHAPE_WIDTH: f64 = 128.0;
 const SHAPE_HEIGHT: f64 = 44.0;
 const SHAPE_SAMPLES: usize = 96;
+// viewBox margin so the start dot (x=0, r=2.6) and the peaks of the curve are
+// inside the box without needing overflow:visible.
+const SHAPE_MARGIN_X: f64 = 4.0;
+const SHAPE_MARGIN_Y: f64 = 3.0;
+// Intrinsic element size, so iOS WebKit gives the SVG a non-zero box in flex.
+// preserveAspectRatio="none" lets CSS stretch it past this.
+const SHAPE_ELEMENT_WIDTH: f64 = 160.0;
+const SHAPE_ELEMENT_HEIGHT: f64 = 48.0;
 
 /// Draw one loop of a modulator's curve.
 ///
@@ -364,7 +407,20 @@ fn modulator_shape(
             // Rnd is seeded from the id, so the curve cannot be reproduced
             // without it.
             data-modulator-id={modulator.id.to_string()}
-            viewBox={format!("0 0 {SHAPE_WIDTH} {SHAPE_HEIGHT}")}
+            // Explicit width/height are required: an inline <svg> sized only by
+            // a viewBox collapses to zero as a flex item in iOS WebKit. The
+            // viewBox is inset by a margin so the start dot at x=0 sits inside
+            // it rather than depending on overflow:visible, which iOS handles
+            // inconsistently.
+            width={SHAPE_ELEMENT_WIDTH.to_string()}
+            height={SHAPE_ELEMENT_HEIGHT.to_string()}
+            viewBox={format!(
+                "{} {} {} {}",
+                -SHAPE_MARGIN_X,
+                -SHAPE_MARGIN_Y,
+                SHAPE_WIDTH + 2.0 * SHAPE_MARGIN_X,
+                SHAPE_HEIGHT + 2.0 * SHAPE_MARGIN_Y,
+            )}
             preserveAspectRatio="none"
             role="img"
             aria-label={label.clone()}
@@ -675,17 +731,42 @@ pub fn app() -> Html {
     {
         let is_playing = is_playing.clone();
         let timing_status = timing_status.clone();
-        use_effect_with(*is_playing, move |is_playing| {
-            let interval = if !*is_playing {
+        let audio_error = audio_error.clone();
+        use_effect_with(*is_playing, move |playing| {
+            let interval = if !*playing {
                 timing_status.set(TimingStatus::default());
                 None
             } else {
-                let timing_status_now = timing_status.clone();
-                let _ = playback::timing_status().map(|status| timing_status_now.set(status));
+                // The JS engine can stop on its own -- a worklet stall, or an
+                // async start failure on iOS where start() returned true before
+                // the worklet failed to load. It reports that as Idle here, and
+                // nothing else would ever reset the button. Treat Idle-while-
+                // playing as an authoritative "it stopped" and flip the state
+                // back so the button returns to Start.
+                let sync_state = move |status: &TimingStatus,
+                                       is_playing: &UseStateHandle<bool>,
+                                       audio_error: &UseStateHandle<Option<String>>| {
+                    if status.state == TimingHealth::Idle {
+                        is_playing.set(false);
+                        audio_error
+                            .set(Some("Playback stopped — the audio engine could not keep running.".into()));
+                        true
+                    } else {
+                        false
+                    }
+                };
+
+                if let Ok(status) = playback::timing_status() {
+                    if !sync_state(&status, &is_playing, &audio_error) {
+                        timing_status.set(status);
+                    }
+                }
 
                 Some(Interval::new(250, move || {
                     if let Ok(status) = playback::timing_status() {
-                        timing_status.set(status);
+                        if !sync_state(&status, &is_playing, &audio_error) {
+                            timing_status.set(status);
+                        }
                     }
                 }))
             };

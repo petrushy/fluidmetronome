@@ -41,8 +41,42 @@ body {
     linear-gradient(180deg, #faf7f2 0%, #f3efe8 44%, #f7f4ee 100%);
 }
 
+/* Pad by the notch/home-indicator insets in a standalone iOS PWA (they are 0 in
+   a normal browser), added to the base 22px. Without this, viewport-fit=cover
+   lets content run under the status bar and home indicator. */
 body {
-  padding: 22px;
+  padding: calc(22px + env(safe-area-inset-top)) calc(22px + env(safe-area-inset-right))
+    calc(22px + env(safe-area-inset-bottom)) calc(22px + env(safe-area-inset-left));
+}
+
+/* "New version -- reload" prompt injected by js/sw-register.js. */
+#fm-update-banner {
+  position: fixed;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px 12px 18px;
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  background: rgba(37, 43, 51, 0.96);
+  color: #f6f3ee;
+  box-shadow: 0 18px 38px rgba(41, 37, 30, 0.28);
+  font-size: 0.9rem;
+}
+
+#fm-update-banner button {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 16px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #10241d;
+  font-weight: 500;
 }
 
 button,
@@ -86,6 +120,7 @@ input[type="number"]::-webkit-inner-spin-button {
   border: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(255, 253, 249, 0.94), rgba(249, 245, 238, 0.92));
   box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
 }
 
@@ -356,6 +391,7 @@ input[type="number"]::-webkit-inner-spin-button {
   border-radius: 26px;
   background: linear-gradient(180deg, rgba(255, 253, 249, 0.94), rgba(249, 245, 238, 0.92));
   box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
 }
 
@@ -537,13 +573,19 @@ input[type="number"]::-webkit-inner-spin-button {
    the row keeps a single baseline. */
 .modulator-shape {
   flex: 1 1 160px;
-  min-width: 128px;
+  /* A definite floor: even if iOS miscomputes the flex-basis of an SVG, the box
+     never collapses below this. Paired with explicit width/height attributes on
+     the element. */
+  min-width: 160px;
   max-width: 320px;
+  width: 160px;
   height: 48px;
   border-radius: 12px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.5);
-  overflow: visible;
+  /* The viewBox now includes a margin around the curve, so nothing needs to
+     paint outside the box. */
+  overflow: hidden;
 }
 
 .shape-axis {
@@ -773,6 +815,13 @@ input[type="number"]::-webkit-inner-spin-button {
     width: 32px;
     height: 32px;
   }
+
+  /* The column options trigger needs a real touch target and full visibility
+     on a phone -- it is the only way to add, duplicate, or delete a column. */
+  .column-menu-button {
+    height: 28px;
+    opacity: 1;
+  }
 }
 
 .instrument-name small {
@@ -934,7 +983,7 @@ input[type="number"]::-webkit-inner-spin-button {
 .column-menu-button {
   width: 100%;
   max-width: 46px;
-  height: 15px;
+  height: 18px;
   margin: 0 auto;
   padding: 0;
   display: flex;
@@ -947,7 +996,9 @@ input[type="number"]::-webkit-inner-spin-button {
   font-size: 0.72rem;
   line-height: 1;
   cursor: pointer;
-  opacity: 0.55;
+  /* Steady, not hover-gated: there is no hover on touch, so a hover-only
+     control is invisible and unreachable on iOS. */
+  opacity: 0.8;
   transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
 }
 
@@ -976,6 +1027,10 @@ input[type="number"]::-webkit-inner-spin-button {
   z-index: 41;
   min-width: 200px;
   max-width: calc(100vw - 24px);
+  /* Matches COLUMN_MENU_MAX_HEIGHT in src/app.rs, which clamps the top so the
+     menu stays on screen; scroll if a future menu ever exceeds it. */
+  max-height: 260px;
+  overflow-y: auto;
   display: grid;
   gap: 3px;
   padding: 8px;

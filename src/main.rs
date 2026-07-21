@@ -2,16 +2,11 @@ mod app;
 mod audio;
 mod file_io;
 
-fn register_service_worker() {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-
-    let container = window.navigator().service_worker();
-    let _ = container.register("/static/sw.js");
-}
+// The service worker is registered by js/sw-register.js (loaded from
+// index.html), which also handles the "new version -- reload" prompt. Keeping
+// it out of the WASM means the update UX is plain DOM and there is a single
+// registration path.
 
 fn main() {
-    register_service_worker();
     yew::Renderer::<app::App>::new().render();
 }

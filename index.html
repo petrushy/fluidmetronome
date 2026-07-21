@@ -2,15 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover lets the page fill the screen behind the notch and
+         home indicator; CSS then pads with env(safe-area-inset-*). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#16324f" />
     <meta name="description" content="A PWA metronome for uneven Swedish folk rhythms." />
+    <!-- Installed-app behaviour on iOS: standalone chrome, translucent status
+         bar, and a home-screen title. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Metronome" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <link data-trunk rel="copy-dir" href="static" />
     <link data-trunk rel="copy-dir" href="js" />
     <link rel="manifest" href="/static/manifest.webmanifest" />
     <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml" />
+    <!-- iOS ignores SVG manifest icons; it uses this PNG for the home screen. -->
+    <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
     <link rel="stylesheet" href="/static/app.css" />
     <script src="/js/audio-engine.js"></script>
+    <script src="/js/sw-register.js"></script>
     <title>Fluid Metronome</title>
   </head>
   <body>

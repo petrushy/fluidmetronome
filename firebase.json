@@ -14,7 +14,8 @@
     ],
     "headers": [
       {
-        "source": "**/*.@(js|css|wasm)",
+        "comment": "Only the Trunk-hashed bundle is immutable -- its filename changes every build, so a year-long cache is safe and desirable. Everything else lives at a stable path and must revalidate. Scoping immutability to this prefix (rather than a **/*.js|css|wasm glob) keeps it from ever catching sw.js, /js/*, or app.css, which is what pinned stale code on installed iOS PWAs.",
+        "source": "/fluidmetronome-*",
         "headers": [
           {
             "key": "Cache-Control",
@@ -23,7 +24,8 @@
         ]
       },
       {
-        "source": "/index.html",
+        "comment": "Stable-path assets that change between builds: the service worker, the hand-authored audio JS, the stylesheet, and the HTML shell. no-cache means the browser may hold a copy but must revalidate before using it, so an edit reaches an installed PWA on the next load.",
+        "source": "@(/index.html|/static/sw.js|/static/app.css|/js/**|/static/manifest.webmanifest|/static/firebase-config.js)",
         "headers": [
           {
             "key": "Cache-Control",

@@ -178,6 +178,52 @@ track size — a `margin-bottom` cannot do this, because a margin on a grid item
 in a fixed-size track shrinks the item instead of displacing rows below.
 `tests/browser/layout.mjs` asserts zero drift.
 
+## PWA, caching, and iOS
+
+iOS Safari is the deployment target, and it broke in ways the laptop never
+showed. The invariants below each cost a debugging session.
+
+**Never serve the service worker (or stable-path assets) as `immutable`.** In
+`firebase.json` the immutable, one-year `Cache-Control` is scoped to
+`/fluidmetronome-*` — the Trunk-hashed bundle, whose name changes every build.
+A broad `**/*.@(js|css|wasm)` glob used to catch `/static/sw.js`, `/js/*`, and
+`app.css` too; iOS then pinned the service worker for a year and never picked up
+a deploy. Anything at a stable path (sw.js, `/js/*`, app.css, index.html,
+manifest) must be `no-cache` so it revalidates.
+
+**The service worker uses stale-while-revalidate for stable paths**
+(`static/sw.js`), cache-first only for the hashed bundle. Bump `CACHE_NAME` on
+each release; `activate` purges every other cache. `js/sw-register.js` registers
+the worker (not `main.rs` anymore) and shows the "new version — reload" banner
+via `updatefound`.
+
+**An already-installed PWA cannot receive the fix that repairs updates** — its
+old `sw.js` is still pinned immutable on-device. After deploying a caching-header
+change, the phone needs the PWA deleted and re-added once. Say so.
+
+**The transport button is synced by the timing poll, not a JS callback.** The JS
+engine can stop itself (worklet stall, iOS AudioContext suspension, an async
+worklet-load failure where `start()` already returned `true`). There is no
+JS→Rust "stopped" channel, so the 250ms `timing_status` poll in `src/app.rs`
+treats a JS-reported `Idle` while `is_playing` as authoritative and flips the
+button back. `tests/browser/transport-recovery.mjs` forces the divergence.
+
+**Inline SVGs need explicit `width`/`height`, not just a `viewBox`.** A
+width-less `<svg>` as a flex item collapses to zero in iOS WebKit — this hid the
+modulator graphs entirely. `modulator_shape` sets element dimensions and a
+margin-inset viewBox so nothing relies on `overflow: visible` (also flaky on
+iOS). `tests/browser/modulator-shape.mjs` asserts a non-zero rendered box.
+
+**Touch has no hover.** A hover-gated or sub-15px control is invisible and
+unreachable on a phone (the column `⋯` trigger was both). Keep such controls
+steadily visible and give them a coarse-pointer touch size.
+
+**`backdrop-filter` needs the `-webkit-` prefix** (iOS < 18), and
+`env(safe-area-inset-*)` padding on `body` keeps content clear of the notch and
+home indicator (requires `viewport-fit=cover` in the meta). The apple-touch-icon
+is a real PNG (iOS ignores SVG manifest icons); regenerate it with
+`node scripts/make-touch-icon.mjs`.
+
 ## Verification
 
 Compiling proves very little here — the bugs live in CSS layout and audio

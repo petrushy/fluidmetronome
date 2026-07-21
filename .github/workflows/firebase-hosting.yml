@@ -1,0 +1,67 @@
+name: CI and deploy Firebase Hosting
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+# The workflow only needs to read the source. Firebase authentication is passed
+# directly to its deployment action as a repository secret.
+permissions:
+  contents: read
+
+# Do not cancel a live deployment that is already uploading. A newer master
+# commit waits its turn, ensuring deployments reach Hosting in commit order.
+concurrency:
+  group: firebase-hosting-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust and the WebAssembly target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Rust build dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install the pinned Trunk build tool
+        run: cargo install trunk --version 0.21.14 --locked
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install Chromium for browser tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Test the Rust rhythm model
+        run: cargo test --bins
+
+      - name: Build the production PWA
+        run: trunk build --release
+
+      - name: Test audio and Chromium UI behaviour
+        run: npm test
+
+      # Pull requests stop after CI. Only a direct push to master can read the
+      # Firebase secret and deploy the built dist/ directory to the live site.
+      - name: Deploy master to Firebase Hosting
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_FLUIDMETRONOME }}
+          projectId: fluidmetronome
+          channelId: live

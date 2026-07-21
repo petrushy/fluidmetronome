@@ -49,6 +49,17 @@ const clickAction = async (label) => {
   await page.waitForTimeout(180);
 };
 
+// The trigger must be visible and touch-usable without hovering -- there is no
+// hover on iOS, so a hover-gated or 1px-tall control is unreachable there.
+const trigger = await page.locator(".column-menu-button").first().evaluate((el) => {
+  const rect = el.getBoundingClientRect();
+  const style = getComputedStyle(el);
+  return { width: rect.width, height: rect.height, opacity: Number(style.opacity) };
+});
+check("column ⋯ trigger is visible without hover",
+  trigger.width > 10 && trigger.height >= 14 && trigger.opacity > 0.4,
+  `${Math.round(trigger.width)}x${Math.round(trigger.height)} opacity ${trigger.opacity}`);
+
 let before = await readGrid();
 await openMenu(1);
 await clickAction("Add column to right");

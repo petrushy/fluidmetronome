@@ -47,6 +47,14 @@ await page.waitForSelector(".modulators-card");
 await page.getByRole("button", { name: "Add Modulator" }).click();
 await page.waitForSelector(".modulator-shape");
 
+// The SVG must have a non-zero rendered box. A width-less inline <svg> collapses
+// to zero as a flex item in iOS WebKit -- this guards that regression directly,
+// and matters most under the webkit engine.
+const svgBox = await page.locator(".modulator-shape").boundingBox();
+check("modulator graph has a non-zero rendered size",
+  svgBox && svgBox.width > 20 && svgBox.height > 20,
+  svgBox ? `${Math.round(svgBox.width)}x${Math.round(svgBox.height)}` : "null");
+
 const setField = async (label, value) => {
   const field = page.locator(".modulator-field", { hasText: label }).first();
   await field.locator("input").fill(String(value));

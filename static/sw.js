@@ -1,4 +1,14 @@
-const CACHE_NAME = "fluid-metronome-v4";
+// Bump on every release. With sw.js now served no-cache (see firebase.json), a
+// changed byte here reliably triggers the browser's update flow, and activate
+// purges every cache that is not this one.
+const CACHE_NAME = "fluid-metronome-v5";
+
+// The Trunk-hashed bundle is content-addressed, so it is safe to serve straight
+// from cache and never revalidate. Everything else lives at a stable path and
+// changes between builds, so it uses stale-while-revalidate.
+function isImmutableAsset(url) {
+  return new URL(url).pathname.startsWith("/fluidmetronome-");
+}
 
 // Static app shell — paths that don't change between builds.
 const APP_SHELL = [
@@ -6,7 +16,10 @@ const APP_SHELL = [
   "/static/app.css",
   "/static/manifest.webmanifest",
   "/static/icons/icon.svg",
+  "/static/icons/apple-touch-icon.png",
   "/js/audio-engine.js",
+  "/js/audio-worklet.js",
+  "/js/sw-register.js",
   "/js/firebase.js",
   "/static/firebase-config.js",
 ];
@@ -57,6 +70,14 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+// The update banner (js/sw-register.js) posts this when the user clicks Reload,
+// so a freshly-installed worker can take over immediately instead of waiting.
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "skip-waiting") {
+    self.skipWaiting();
+  }
+});
+
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET" || !isSameOrigin(event.request)) {
     return;
@@ -95,22 +116,47 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // All other same-origin GET requests: cache-first, populate cache on miss.
+  // The immutable hashed bundle: cache-first, never revalidated.
+  if (isImmutableAsset(event.request.url)) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        if (cached) {
+          return cached;
+        }
+
+        return fetch(event.request).then((response) => {
+          if (response.ok) {
+            const cloned = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, cloned));
+          }
+          return response;
+        });
+      }),
+    );
+    return;
+  }
+
+  // Every other same-origin GET (app.css, /js/*, icons): stale-while-revalidate.
+  // Serve the cached copy instantly so the app is fast and works offline, but
+  // always fetch a fresh copy in the background and store it for next time --
+  // so an edit to a stable-path asset reaches an installed PWA on the next load
+  // rather than being pinned forever.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
+    caches.open(CACHE_NAME).then(async (cache) => {
+      const cached = await cache.match(event.request);
+      const fresh = fetch(event.request)
+        .then((response) => {
+          if (response.ok) cache.put(event.request, response.clone());
+          return response;
+        })
+        .catch(() => null);
+
       if (cached) {
+        event.waitUntil(fresh);
         return cached;
       }
 
-      return fetch(event.request).then((response) => {
-        if (!response.ok) {
-          return response;
-        }
-
-        const cloned = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, cloned));
-        return response;
-      });
+      return (await fresh) ?? Response.error();
     }),
   );
 });

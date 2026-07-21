@@ -1,5 +1,6 @@
 mod app;
 mod audio;
+mod file_io;
 
 fn register_service_worker() {
     let Some(window) = web_sys::window() else {

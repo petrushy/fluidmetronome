@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoteVelocity {
     Off,
     Soft,
@@ -107,6 +107,18 @@ impl InstrumentKind {
     }
 }
 
+/// A step must advance the transport by at least one tick. A zero here stalls
+/// the worklet's scheduling loop, so it is clamped at every entry point.
+pub const MIN_DELAY_TICKS: u8 = 1;
+pub const DEFAULT_DELAY_TICKS: u8 = 8;
+pub const MIN_BPM: u16 = 30;
+pub const MAX_BPM: u16 = 280;
+/// Mini-ticks per beat is a float so unusual subdivisions can be typed
+/// directly. It only has to stay finite and positive; the transport divides by it.
+pub const MIN_TICKS_PER_BEAT: f64 = 0.01;
+pub const MAX_TICKS_PER_BEAT: f64 = 512.0;
+pub const DEFAULT_TICKS_PER_BEAT: f64 = 8.0;
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Step {
     pub delay_ticks: u8,
@@ -114,7 +126,9 @@ pub struct Step {
 
 impl Step {
     pub fn new(delay_ticks: u8) -> Self {
-        Self { delay_ticks }
+        Self {
+            delay_ticks: delay_ticks.max(MIN_DELAY_TICKS),
+        }
     }
 }
 
@@ -184,36 +198,89 @@ impl BeatModulatorFunction {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct BeatModulator {
     pub id: u64,
     pub function: BeatModulatorFunction,
-    pub amplitude_ticks: i16,
-    pub wavelength_ticks: u16,
-    pub phase_degrees: i16,
+    pub amplitude_ticks: f64,
+    pub wavelength_ticks: f64,
+    pub phase_degrees: f64,
     pub muted: bool,
     pub restart_each_loop: bool,
 }
 
 impl BeatModulator {
+    /// Offset in ticks this modulator applies at `step_tick`.
+    ///
+    /// This mirrors `modulatorOffsetTicks` in js/audio-worklet.js line for line.
+    /// The worklet is the authority -- it is what you actually hear -- and this
+    /// copy exists so the UI can draw the curve. If the two drift apart the
+    /// diagram starts lying, so `tests/browser/modulator-shape.mjs` checks the
+    /// rendered curve against the worklet's own function.
+    pub fn offset_ticks(&self, step_tick: f64, cycle_ticks: f64) -> f64 {
+        let wavelength = if self.wavelength_ticks.is_finite() && self.wavelength_ticks > 0.0 {
+            self.wavelength_ticks.max(1.0)
+        } else {
+            1.0
+        };
+        let amplitude = if self.amplitude_ticks.is_finite() {
+            self.amplitude_ticks
+        } else {
+            0.0
+        };
+        let phase_degrees = if self.phase_degrees.is_finite() {
+            self.phase_degrees
+        } else {
+            0.0
+        };
+
+        let domain_tick = if self.restart_each_loop && cycle_ticks > 0.0 {
+            step_tick % cycle_ticks
+        } else {
+            step_tick
+        };
+
+        let phase_ticks = (phase_degrees / 360.0) * wavelength;
+        let shifted_tick = domain_tick + phase_ticks;
+        let phase = ((shifted_tick % wavelength) + wavelength) % wavelength;
+        let normalized_phase = phase / wavelength;
+
+        match self.function {
+            BeatModulatorFunction::Cos => amplitude * (normalized_phase * std::f64::consts::TAU).cos(),
+            BeatModulatorFunction::Raise => amplitude * normalized_phase,
+            BeatModulatorFunction::Drop => amplitude * (1.0 - normalized_phase),
+            BeatModulatorFunction::Rnd => {
+                let segment = (shifted_tick / wavelength).floor();
+                amplitude * seeded_unit_value(self.id as f64, segment)
+            }
+            BeatModulatorFunction::Sin => amplitude * (normalized_phase * std::f64::consts::TAU).sin(),
+        }
+    }
+
     pub fn new(id: u64) -> Self {
         Self {
             id,
             function: BeatModulatorFunction::Sin,
-            amplitude_ticks: 2,
-            wavelength_ticks: 16,
-            phase_degrees: 0,
+            amplitude_ticks: 2.0,
+            wavelength_ticks: 16.0,
+            phase_degrees: 0.0,
             muted: false,
             restart_each_loop: true,
         }
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Mirrors `seededUnitValue` in js/audio-worklet.js.
+fn seeded_unit_value(seed_a: f64, seed_b: f64) -> f64 {
+    let x = (seed_a * 12.9898 + seed_b * 78.233).sin() * 43758.5453;
+    (x - x.floor()) * 2.0 - 1.0
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct RhythmGrid {
     pub title: String,
     pub bpm: u16,
-    pub ticks_per_beat: u8,
+    pub ticks_per_beat: f64,
     pub steps: Vec<Step>,
     pub tracks: Vec<Track>,
     #[serde(default)]
@@ -228,7 +295,7 @@ impl RhythmGrid {
         Self {
             title: title.into(),
             bpm: 108,
-            ticks_per_beat: 8,
+            ticks_per_beat: DEFAULT_TICKS_PER_BEAT,
             steps,
             tracks: vec![default_track("Pulse", InstrumentKind::Click, step_count), default_track("Accent", InstrumentKind::Accent, step_count)],
             modulators: Vec::new(),
@@ -259,10 +326,40 @@ impl RhythmGrid {
         Self {
             title: "Värmland Groove".into(),
             bpm: 108,
-            ticks_per_beat: 8,
+            ticks_per_beat: DEFAULT_TICKS_PER_BEAT,
             steps,
             tracks: vec![pulse, accent],
             modulators: Vec::new(),
+        }
+    }
+
+    /// Force a grid into a shape the audio worklet can safely play.
+    ///
+    /// `Step::new` and the editor callbacks both clamp their inputs, but
+    /// `Deserialize` bypasses them entirely — so every grid that arrives from
+    /// localStorage, and later from Firestore, must pass through here before it
+    /// reaches the transport.
+    pub fn sanitize(&mut self) {
+        self.bpm = self.bpm.clamp(MIN_BPM, MAX_BPM);
+        self.ticks_per_beat = if self.ticks_per_beat.is_finite() {
+            self.ticks_per_beat.clamp(MIN_TICKS_PER_BEAT, MAX_TICKS_PER_BEAT)
+        } else {
+            DEFAULT_TICKS_PER_BEAT
+        };
+
+        if self.steps.is_empty() {
+            self.steps.push(Step::new(DEFAULT_DELAY_TICKS));
+        }
+
+        for step in &mut self.steps {
+            step.delay_ticks = step.delay_ticks.max(MIN_DELAY_TICKS);
+        }
+
+        // A track whose velocity count disagrees with the step count leaves the
+        // grid renderer and the scheduler reading different lengths.
+        let step_count = self.steps.len();
+        for track in &mut self.tracks {
+            track.resize(step_count);
         }
     }
 
@@ -270,11 +367,92 @@ impl RhythmGrid {
         self.steps.len()
     }
 
+    /// Length of one loop in mini-ticks -- the sum of every column's spacing.
+    pub fn total_ticks(&self) -> u32 {
+        self.steps
+            .iter()
+            .map(|step| u32::from(step.delay_ticks))
+            .sum()
+    }
+
+    /// Tick position where each column starts, the first at 0.
+    ///
+    /// A column's `delay_ticks` is the gap until the *next* column, so these are
+    /// the running totals, and the last column starts before `total_ticks()`.
+    pub fn step_tick_offsets(&self) -> Vec<f64> {
+        let mut offsets = Vec::with_capacity(self.steps.len());
+        let mut tick = 0u32;
+
+        for step in &self.steps {
+            offsets.push(f64::from(tick));
+            tick += u32::from(step.delay_ticks);
+        }
+
+        offsets
+    }
+
+    /// Length of one loop in beats. Fractional by design: an uneven pattern is
+    /// under no obligation to close on a whole beat.
+    pub fn total_beats(&self) -> f64 {
+        let per_beat = self.ticks_per_beat.max(MIN_TICKS_PER_BEAT);
+        f64::from(self.total_ticks()) / per_beat
+    }
+
     pub fn add_step(&mut self, delay_ticks: u8) {
         self.steps.push(Step::new(delay_ticks));
         let new_len = self.steps.len();
         for track in &mut self.tracks {
             track.resize(new_len);
+        }
+    }
+
+    /// Insert an empty column at `index`, carrying the neighbour's spacing so
+    /// the groove keeps its feel until the new column is edited.
+    pub fn insert_step(&mut self, index: usize, neighbour: usize) {
+        let index = index.min(self.steps.len());
+        let delay_ticks = self
+            .steps
+            .get(neighbour)
+            .map_or(DEFAULT_DELAY_TICKS, |step| step.delay_ticks);
+
+        self.steps.insert(index, Step::new(delay_ticks));
+        for track in &mut self.tracks {
+            let at = index.min(track.step_velocities.len());
+            track.step_velocities.insert(at, NoteVelocity::Off);
+        }
+    }
+
+    /// Copy column `source` -- spacing and every track's hit -- to `index`.
+    pub fn duplicate_step(&mut self, source: usize, index: usize) {
+        let Some(step) = self.steps.get(source).cloned() else {
+            return;
+        };
+
+        let index = index.min(self.steps.len());
+        self.steps.insert(index, step);
+        for track in &mut self.tracks {
+            let velocity = track
+                .step_velocities
+                .get(source)
+                .copied()
+                .unwrap_or(NoteVelocity::Off);
+            let at = index.min(track.step_velocities.len());
+            track.step_velocities.insert(at, velocity);
+        }
+    }
+
+    /// Remove column `index`. The last remaining column is kept, since a
+    /// pattern with no steps cannot be played.
+    pub fn remove_step(&mut self, index: usize) {
+        if self.steps.len() <= 1 || index >= self.steps.len() {
+            return;
+        }
+
+        self.steps.remove(index);
+        for track in &mut self.tracks {
+            if index < track.step_velocities.len() {
+                track.step_velocities.remove(index);
+            }
         }
     }
 
@@ -292,7 +470,7 @@ impl RhythmGrid {
 
     pub fn set_step_delay(&mut self, index: usize, delay_ticks: u8) {
         if let Some(step) = self.steps.get_mut(index) {
-            step.delay_ticks = delay_ticks.max(1);
+            step.delay_ticks = delay_ticks.max(MIN_DELAY_TICKS);
         }
     }
 
@@ -364,21 +542,21 @@ impl RhythmGrid {
         }
     }
 
-    pub fn set_modulator_amplitude(&mut self, id: u64, amplitude_ticks: i16) {
+    pub fn set_modulator_amplitude(&mut self, id: u64, amplitude_ticks: f64) {
         if let Some(modulator) = self.modulators.iter_mut().find(|modulator| modulator.id == id) {
-            modulator.amplitude_ticks = amplitude_ticks.clamp(-64, 64);
+            modulator.amplitude_ticks = amplitude_ticks.clamp(-64.0, 64.0);
         }
     }
 
-    pub fn set_modulator_wavelength(&mut self, id: u64, wavelength_ticks: u16) {
+    pub fn set_modulator_wavelength(&mut self, id: u64, wavelength_ticks: f64) {
         if let Some(modulator) = self.modulators.iter_mut().find(|modulator| modulator.id == id) {
-            modulator.wavelength_ticks = wavelength_ticks.max(1);
+            modulator.wavelength_ticks = wavelength_ticks.max(0.001);
         }
     }
 
-    pub fn set_modulator_phase(&mut self, id: u64, phase_degrees: i16) {
+    pub fn set_modulator_phase(&mut self, id: u64, phase_degrees: f64) {
         if let Some(modulator) = self.modulators.iter_mut().find(|modulator| modulator.id == id) {
-            modulator.phase_degrees = phase_degrees.clamp(-360, 360);
+            modulator.phase_degrees = phase_degrees.clamp(-360.0, 360.0);
         }
     }
 
@@ -392,6 +570,487 @@ impl RhythmGrid {
         if let Some(modulator) = self.modulators.iter_mut().find(|modulator| modulator.id == id) {
             modulator.restart_each_loop = restart_each_loop;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grid_from_json(json: &str) -> RhythmGrid {
+        serde_json::from_str(json).expect("fixture should deserialize")
+    }
+
+    #[test]
+    fn step_new_clamps_zero_delay() {
+        assert_eq!(Step::new(0).delay_ticks, MIN_DELAY_TICKS);
+        assert_eq!(Step::new(5).delay_ticks, 5);
+    }
+
+    #[test]
+    fn deserialization_preserves_zero_delay_until_sanitized() {
+        // This is the reason sanitize() has to exist: serde bypasses Step::new.
+        let mut grid = grid_from_json(
+            r#"{"title":"t","bpm":108,"ticks_per_beat":8,
+                "steps":[{"delay_ticks":8},{"delay_ticks":0}],"tracks":[]}"#,
+        );
+        assert_eq!(grid.steps[1].delay_ticks, 0);
+
+        grid.sanitize();
+        assert_eq!(grid.steps[1].delay_ticks, MIN_DELAY_TICKS);
+    }
+
+    #[test]
+    fn sanitize_clamps_tempo_fields() {
+        let mut grid = grid_from_json(
+            r#"{"title":"t","bpm":0,"ticks_per_beat":0,
+                "steps":[{"delay_ticks":8}],"tracks":[]}"#,
+        );
+        grid.sanitize();
+
+        assert_eq!(grid.bpm, MIN_BPM);
+        assert_eq!(grid.ticks_per_beat, MIN_TICKS_PER_BEAT);
+
+        let mut fast = grid_from_json(
+            r#"{"title":"t","bpm":65535,"ticks_per_beat":8,
+                "steps":[{"delay_ticks":8}],"tracks":[]}"#,
+        );
+        fast.sanitize();
+        assert_eq!(fast.bpm, MAX_BPM);
+    }
+
+    #[test]
+    fn sanitize_fills_empty_step_list() {
+        let mut grid = grid_from_json(
+            r#"{"title":"t","bpm":108,"ticks_per_beat":8,"steps":[],"tracks":[]}"#,
+        );
+        grid.sanitize();
+
+        assert_eq!(grid.steps.len(), 1);
+        assert_eq!(grid.steps[0].delay_ticks, DEFAULT_DELAY_TICKS);
+    }
+
+    #[test]
+    fn sanitize_aligns_track_length_with_steps() {
+        let mut grid = grid_from_json(
+            r#"{"title":"t","bpm":108,"ticks_per_beat":8,
+                "steps":[{"delay_ticks":8},{"delay_ticks":8},{"delay_ticks":8}],
+                "tracks":[
+                  {"name":"short","instrument":"Click","step_velocities":[3]},
+                  {"name":"long","instrument":"Click","step_velocities":[3,3,3,3,3]}
+                ]}"#,
+        );
+        grid.sanitize();
+
+        assert_eq!(grid.tracks[0].step_velocities.len(), 3);
+        assert_eq!(grid.tracks[1].step_velocities.len(), 3);
+        // Padding is silent, and truncation keeps the surviving hits.
+        assert_eq!(grid.tracks[0].step_velocities[2], NoteVelocity::Off);
+        assert_eq!(grid.tracks[1].step_velocities[2], NoteVelocity::Hard);
+    }
+
+    fn grid_with_columns() -> RhythmGrid {
+        let mut grid = RhythmGrid::demo();
+        grid.tracks[0].step_velocities = vec![
+            NoteVelocity::Hard,
+            NoteVelocity::Soft,
+            NoteVelocity::Off,
+            NoteVelocity::Medium,
+            NoteVelocity::Off,
+            NoteVelocity::Hard,
+        ];
+        grid
+    }
+
+    #[test]
+    fn insert_step_adds_an_empty_column_and_keeps_tracks_in_step() {
+        let mut grid = grid_with_columns();
+        let before = grid.steps.len();
+
+        // "Add to right" of column 1.
+        grid.insert_step(2, 1);
+
+        assert_eq!(grid.steps.len(), before + 1);
+        assert_eq!(grid.steps[2].delay_ticks, grid.steps[1].delay_ticks);
+        assert_eq!(grid.tracks[0].step_velocities[2], NoteVelocity::Off);
+        // The column that was at 2 shifted right, not overwritten.
+        assert_eq!(grid.tracks[0].step_velocities[3], NoteVelocity::Off);
+        for track in &grid.tracks {
+            assert_eq!(track.step_velocities.len(), grid.steps.len());
+        }
+    }
+
+    #[test]
+    fn duplicate_step_copies_spacing_and_hits() {
+        let mut grid = grid_with_columns();
+        let source_delay = grid.steps[1].delay_ticks;
+
+        // "Duplicate to left" of column 1.
+        grid.duplicate_step(1, 1);
+
+        assert_eq!(grid.steps[1].delay_ticks, source_delay);
+        assert_eq!(grid.steps[2].delay_ticks, source_delay);
+        assert_eq!(grid.tracks[0].step_velocities[1], NoteVelocity::Soft);
+        assert_eq!(grid.tracks[0].step_velocities[2], NoteVelocity::Soft);
+        for track in &grid.tracks {
+            assert_eq!(track.step_velocities.len(), grid.steps.len());
+        }
+    }
+
+    #[test]
+    fn duplicate_step_to_the_right_lands_after_the_source() {
+        let mut grid = grid_with_columns();
+        grid.duplicate_step(0, 1);
+
+        assert_eq!(grid.tracks[0].step_velocities[0], NoteVelocity::Hard);
+        assert_eq!(grid.tracks[0].step_velocities[1], NoteVelocity::Hard);
+        assert_eq!(grid.tracks[0].step_velocities[2], NoteVelocity::Soft);
+    }
+
+    #[test]
+    fn remove_step_drops_the_column_from_every_track() {
+        let mut grid = grid_with_columns();
+        let before = grid.steps.len();
+
+        grid.remove_step(1);
+
+        assert_eq!(grid.steps.len(), before - 1);
+        assert_eq!(grid.tracks[0].step_velocities[1], NoteVelocity::Off);
+        for track in &grid.tracks {
+            assert_eq!(track.step_velocities.len(), grid.steps.len());
+        }
+    }
+
+    #[test]
+    fn remove_step_keeps_the_last_column() {
+        let mut grid = grid_with_columns();
+        while grid.steps.len() > 1 {
+            grid.remove_step(0);
+        }
+
+        grid.remove_step(0);
+        assert_eq!(grid.steps.len(), 1);
+    }
+
+    #[test]
+    fn column_edits_ignore_out_of_range_indices() {
+        let mut grid = grid_with_columns();
+        let before = grid.clone();
+
+        grid.remove_step(99);
+        grid.duplicate_step(99, 0);
+        assert!(grid == before);
+
+        // An insert past the end clamps rather than panicking.
+        grid.insert_step(99, 99);
+        assert_eq!(grid.steps.len(), before.steps.len() + 1);
+    }
+
+    fn modulator(function: BeatModulatorFunction) -> BeatModulator {
+        BeatModulator {
+            id: 1,
+            function,
+            amplitude_ticks: 2.0,
+            wavelength_ticks: 16.0,
+            phase_degrees: 0.0,
+            muted: false,
+            restart_each_loop: true,
+        }
+    }
+
+    #[test]
+    fn modulator_values_at_the_loop_start() {
+        // What each function does at tick 0 is the thing the diagram must get
+        // right: Sin and Raise start at zero, Cos and Drop start at full.
+        let cycle = 40.0;
+        assert!((modulator(BeatModulatorFunction::Sin).offset_ticks(0.0, cycle)).abs() < 1e-9);
+        assert!((modulator(BeatModulatorFunction::Cos).offset_ticks(0.0, cycle) - 2.0).abs() < 1e-9);
+        assert!((modulator(BeatModulatorFunction::Raise).offset_ticks(0.0, cycle)).abs() < 1e-9);
+        assert!((modulator(BeatModulatorFunction::Drop).offset_ticks(0.0, cycle) - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn modulator_traces_its_shape_across_a_wavelength() {
+        let cycle = 64.0;
+        let sin = modulator(BeatModulatorFunction::Sin);
+        // Quarter, half, three-quarter points of a 16-tick wavelength.
+        assert!((sin.offset_ticks(4.0, cycle) - 2.0).abs() < 1e-9);
+        assert!((sin.offset_ticks(8.0, cycle)).abs() < 1e-9);
+        assert!((sin.offset_ticks(12.0, cycle) + 2.0).abs() < 1e-9);
+
+        let raise = modulator(BeatModulatorFunction::Raise);
+        assert!((raise.offset_ticks(8.0, cycle) - 1.0).abs() < 1e-9);
+        let drop = modulator(BeatModulatorFunction::Drop);
+        assert!((drop.offset_ticks(8.0, cycle) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn modulator_phase_and_sign_are_honoured() {
+        let cycle = 64.0;
+        let mut shifted = modulator(BeatModulatorFunction::Sin);
+        shifted.phase_degrees = 90.0;
+        // A quarter turn of phase turns sin into cos.
+        assert!((shifted.offset_ticks(0.0, cycle) - 2.0).abs() < 1e-9);
+
+        let mut inverted = modulator(BeatModulatorFunction::Raise);
+        inverted.amplitude_ticks = -2.0;
+        assert!((inverted.offset_ticks(8.0, cycle) + 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn modulator_restart_wraps_on_the_cycle() {
+        let cycle = 40.0;
+        let looping = modulator(BeatModulatorFunction::Raise);
+        // With restart_each_loop the domain wraps at the cycle, so tick 40
+        // behaves as tick 0.
+        assert!((looping.offset_ticks(40.0, cycle) - looping.offset_ticks(0.0, cycle)).abs() < 1e-9);
+
+        let mut free = looping.clone();
+        free.restart_each_loop = false;
+        // 40 % 16 = 8, i.e. halfway up the ramp.
+        assert!((free.offset_ticks(40.0, cycle) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn totals_describe_one_loop() {
+        let grid = RhythmGrid::demo();
+        // The demo groove is 8 5 7 8 4 8 at 8 ticks per beat.
+        assert_eq!(grid.step_count(), 6);
+        assert_eq!(grid.total_ticks(), 40);
+        assert!((grid.total_beats() - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn step_tick_offsets_start_at_zero_and_run_to_the_cycle() {
+        let grid = RhythmGrid::demo();
+        // The demo groove is 8 5 7 8 4 8.
+        assert_eq!(grid.step_tick_offsets(), vec![0.0, 8.0, 13.0, 20.0, 28.0, 32.0]);
+        // The last column starts one gap before the loop closes.
+        let last = *grid.step_tick_offsets().last().unwrap();
+        assert_eq!(last + f64::from(grid.steps.last().unwrap().delay_ticks),
+                   f64::from(grid.total_ticks()));
+    }
+
+    #[test]
+    fn total_beats_may_be_fractional() {
+        let mut grid = RhythmGrid::demo();
+        grid.set_step_delay(0, 7);
+        assert_eq!(grid.total_ticks(), 39);
+        assert!((grid.total_beats() - 4.875).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pattern_file_round_trips() {
+        let grid = RhythmGrid::demo();
+        let json = PatternFile::new(grid.clone()).to_json().unwrap();
+        let back = PatternFile::from_json(&json).unwrap();
+
+        assert_eq!(back.len(), 1);
+        assert!(back[0] == grid);
+    }
+
+    #[test]
+    fn export_writes_a_single_pattern_not_a_list() {
+        let json = PatternFile::new(RhythmGrid::demo()).to_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert!(value.get("pattern").is_some(), "file should hold one `pattern`");
+        assert!(value.get("patterns").is_none(), "file should not look like a list");
+    }
+
+    #[test]
+    fn pattern_file_still_reads_a_patterns_list() {
+        let json = format!(
+            r#"{{"format":"{PATTERN_FILE_FORMAT}","version":1,"patterns":[{}]}}"#,
+            serde_json::to_string(&RhythmGrid::demo()).unwrap()
+        );
+
+        assert_eq!(PatternFile::from_json(&json).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn pattern_file_accepts_a_bare_grid() {
+        let grid = RhythmGrid::demo();
+        let json = serde_json::to_string(&grid).unwrap();
+        let back = PatternFile::from_json(&json).unwrap();
+
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].title, grid.title);
+    }
+
+    #[test]
+    fn pattern_file_sanitizes_imported_grids() {
+        // A zero delay would stall the worklet, so import must not pass it through.
+        let json = r#"{"format":"fluidmetronome.patterns","version":1,"patterns":[
+            {"title":"bad","bpm":0,"ticks_per_beat":0,
+             "steps":[{"delay_ticks":0}],"tracks":[]}]}"#;
+
+        let back = PatternFile::from_json(json).unwrap();
+        assert_eq!(back[0].steps[0].delay_ticks, MIN_DELAY_TICKS);
+        assert_eq!(back[0].bpm, MIN_BPM);
+        assert_eq!(back[0].ticks_per_beat, MIN_TICKS_PER_BEAT);
+    }
+
+    #[test]
+    fn pattern_file_rejects_foreign_and_newer_files() {
+        let foreign = r#"{"format":"something.else","version":1,"patterns":[]}"#;
+        assert!(PatternFile::from_json(foreign).is_err());
+
+        let newer = format!(
+            r#"{{"format":"{PATTERN_FILE_FORMAT}","version":{},"patterns":[]}}"#,
+            PATTERN_FILE_VERSION + 1
+        );
+        assert!(PatternFile::from_json(&newer).is_err());
+
+        assert!(PatternFile::from_json("not json at all").is_err());
+        assert!(PatternFile::from_json(
+            r#"{"format":"fluidmetronome.patterns","version":1,"patterns":[]}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn title_slug_is_filename_safe() {
+        assert_eq!(title_slug("Värmland Groove"), "varmland-groove");
+        assert_eq!(title_slug("Slängpolska på Öland"), "slangpolska-pa-oland");
+        assert_eq!(title_slug("Polska  /  16"), "polska-16");
+        assert_eq!(title_slug("   "), "pattern");
+        assert_eq!(title_slug("Already-Fine"), "already-fine");
+    }
+
+    #[test]
+    fn sanitize_leaves_a_healthy_grid_untouched() {
+        let mut grid = RhythmGrid::demo();
+        let before = grid.clone();
+        grid.sanitize();
+        assert!(grid == before);
+    }
+}
+
+pub const PATTERN_FILE_FORMAT: &str = "fluidmetronome.patterns";
+pub const PATTERN_FILE_VERSION: u32 = 1;
+
+/// On-disk envelope for an exported pattern.
+///
+/// Export writes exactly one pattern -- the selected one -- so the file holds a
+/// single `pattern`, not a list. A plural key would misdescribe the file to
+/// anyone who opens it.
+#[derive(Clone, PartialEq, Serialize)]
+pub struct PatternFile {
+    pub format: String,
+    pub version: u32,
+    pub pattern: RhythmGrid,
+}
+
+/// Reading side, kept separate so import can stay lenient about shape while
+/// export stays exact.
+#[derive(Deserialize)]
+struct PatternFileIn {
+    format: String,
+    version: u32,
+    #[serde(default)]
+    pattern: Option<RhythmGrid>,
+    /// Accepted so a file holding several patterns still imports.
+    #[serde(default)]
+    patterns: Option<Vec<RhythmGrid>>,
+}
+
+impl PatternFile {
+    pub fn new(pattern: RhythmGrid) -> Self {
+        Self {
+            format: PATTERN_FILE_FORMAT.into(),
+            version: PATTERN_FILE_VERSION,
+            pattern,
+        }
+    }
+
+    pub fn to_json(&self) -> Result<String, String> {
+        serde_json::to_string_pretty(self).map_err(|error| error.to_string())
+    }
+
+    /// Read an exported file, tolerating a bare grid so a hand-written or
+    /// hand-edited pattern still imports.
+    ///
+    /// Every grid is sanitised here: this is untrusted input arriving from
+    /// outside the editor's clamps, exactly like localStorage and Firestore.
+    pub fn from_json(payload: &str) -> Result<Vec<RhythmGrid>, String> {
+        let mut patterns = if let Ok(file) = serde_json::from_str::<PatternFileIn>(payload) {
+            if file.format != PATTERN_FILE_FORMAT {
+                return Err(format!("Not a Fluid Metronome pattern file ({}).", file.format));
+            }
+
+            if file.version > PATTERN_FILE_VERSION {
+                return Err(format!(
+                    "This file was written by a newer version (format v{}, this build reads v{PATTERN_FILE_VERSION}).",
+                    file.version
+                ));
+            }
+
+            match (file.pattern, file.patterns) {
+                (Some(pattern), _) => vec![pattern],
+                (None, Some(patterns)) => patterns,
+                (None, None) => Vec::new(),
+            }
+        } else if let Ok(grid) = serde_json::from_str::<RhythmGrid>(payload) {
+            vec![grid]
+        } else {
+            return Err("Could not read this file as a pattern.".into());
+        };
+
+        if patterns.is_empty() {
+            return Err("That file contains no patterns.".into());
+        }
+
+        for grid in &mut patterns {
+            grid.sanitize();
+        }
+
+        Ok(patterns)
+    }
+}
+
+/// Filename-safe form of a pattern title, e.g. "Värmland Groove" -> "varmland-groove".
+///
+/// Accented letters are transliterated rather than dropped -- titles in this app
+/// are routinely Swedish, and "v-rmland" would be a poor filename.
+pub fn title_slug(title: &str) -> String {
+    let mut slug = String::with_capacity(title.len());
+    let mut pending_dash = false;
+
+    let push = |slug: &mut String, text: &str, pending: &mut bool| {
+        if *pending && !slug.is_empty() {
+            slug.push('-');
+        }
+        *pending = false;
+        slug.push_str(text);
+    };
+
+    for raw in title.chars().flat_map(|ch| ch.to_lowercase()) {
+        let mapped = match raw {
+            'a'..='z' | '0'..='9' => Some(raw.to_string()),
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => Some("a".into()),
+            'è' | 'é' | 'ê' | 'ë' => Some("e".into()),
+            'ì' | 'í' | 'î' | 'ï' => Some("i".into()),
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' => Some("o".into()),
+            'ù' | 'ú' | 'û' | 'ü' => Some("u".into()),
+            'ý' | 'ÿ' => Some("y".into()),
+            'ñ' => Some("n".into()),
+            'ç' => Some("c".into()),
+            'æ' => Some("ae".into()),
+            'ß' => Some("ss".into()),
+            _ => None,
+        };
+
+        match mapped {
+            Some(text) => push(&mut slug, &text, &mut pending_dash),
+            None => pending_dash = true,
+        }
+    }
+
+    if slug.is_empty() {
+        "pattern".into()
+    } else {
+        slug
     }
 }
 

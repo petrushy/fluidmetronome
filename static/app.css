@@ -15,7 +15,11 @@
   --radius-xl: 32px;
   --radius-lg: 24px;
   --radius-md: 18px;
-  --matrix-row-height: 58px;
+  /* Drives both .board-grid rows and .label-rail rows; they must stay equal.
+     70px is the smallest value that fits the label content (name + sound
+     pill) without clipping, and it lifts the grid cells nearer a usable
+     touch target. */
+  --matrix-row-height: 70px;
 }
 
 * {
@@ -177,6 +181,57 @@ input[type="number"]::-webkit-inner-spin-button {
   color: var(--muted);
 }
 
+.timing-pill {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 252, 247, 0.72);
+}
+
+.timing-diode {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border-radius: 999px;
+  background: rgba(111, 120, 132, 0.3);
+  box-shadow: 0 0 0 5px rgba(111, 120, 132, 0.08);
+}
+
+.timing-diode.is-tight {
+  background: #67c38b;
+  box-shadow: 0 0 0 5px rgba(103, 195, 139, 0.16);
+}
+
+.timing-diode.is-late {
+  background: #eb7a70;
+  box-shadow: 0 0 0 5px rgba(235, 122, 112, 0.16);
+}
+
+.timing-diode.is-unknown {
+  background: #d6b069;
+  box-shadow: 0 0 0 5px rgba(214, 176, 105, 0.16);
+}
+
+.timing-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.timing-copy strong {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.timing-copy span {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
 .control-card {
   border-radius: 26px;
   padding: 16px;
@@ -184,6 +239,48 @@ input[type="number"]::-webkit-inner-spin-button {
   flex-wrap: wrap;
   gap: 12px;
   align-items: center;
+}
+
+/* Read-only loop summary. Sits at the end of the control row, pushed right so
+   it reads as a readout rather than another control. */
+.pattern-stats {
+  display: flex;
+  gap: 22px;
+  margin: 0 0 0 auto;
+  padding: 0 6px;
+  align-items: center;
+}
+
+.pattern-stat {
+  display: grid;
+  gap: 3px;
+  justify-items: start;
+}
+
+.pattern-stat dt {
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 500;
+}
+
+.pattern-stat dd {
+  margin: 0;
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+@media (max-width: 640px) {
+  /* On a narrow screen the readout wraps to its own line rather than being
+     squeezed against the buttons. */
+  .pattern-stats {
+    margin-left: 0;
+    width: 100%;
+    justify-content: space-between;
+    gap: 12px;
+  }
 }
 
 .control-field {
@@ -229,6 +326,24 @@ input[type="number"]::-webkit-inner-spin-button {
   border-color: var(--line-strong);
 }
 
+/* A file input styled as a button: the native control is unstyleable, so the
+   label carries the appearance and the input itself is hidden. */
+.file-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.file-button input[type="file"] {
+  display: none;
+}
+
+.file-button:focus-within {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
 .secondary-button.is-active-toggle {
   background: rgba(95, 176, 151, 0.14);
   border-color: rgba(95, 176, 151, 0.32);
@@ -254,6 +369,17 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .pattern-select-field {
   min-width: 180px;
+}
+
+/* Sized like the picker it replaces, so the row does not jump on rename. */
+.rename-input {
+  min-width: 180px;
+}
+
+.rename-input:focus {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .pattern-title-field {
@@ -358,9 +484,14 @@ input[type="number"]::-webkit-inner-spin-button {
   line-height: 1.45;
 }
 
+/* backdrop-filter makes every card its own stacking context, so without an
+   explicit order the later sibling paints over the sound menu once it escapes
+   the sequencer's bounds. */
 .sequencer-card {
   border-radius: 36px;
   padding: 18px;
+  position: relative;
+  z-index: 2;
 }
 
 .modulators-card {
@@ -368,6 +499,8 @@ input[type="number"]::-webkit-inner-spin-button {
   padding: 18px;
   display: grid;
   gap: 14px;
+  position: relative;
+  z-index: 1;
 }
 
 .modulators-header {
@@ -400,6 +533,59 @@ input[type="number"]::-webkit-inner-spin-button {
   background: rgba(255, 255, 255, 0.34);
 }
 
+/* Curve of one loop of the modulator. Height matches the adjacent controls so
+   the row keeps a single baseline. */
+.modulator-shape {
+  flex: 1 1 160px;
+  min-width: 128px;
+  max-width: 320px;
+  height: 48px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.5);
+  overflow: visible;
+}
+
+.shape-axis {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+/* One per column, at the tick it fires. These are the only points the
+   modulator is sampled at; the curve between them is never heard. */
+.shape-column {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  opacity: 0.55;
+  vector-effect: non-scaling-stroke;
+}
+
+.shape-curve {
+  fill: none;
+  stroke: var(--accent-strong);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  /* preserveAspectRatio="none" stretches the viewBox, which would otherwise
+     stretch the stroke with it. */
+  vector-effect: non-scaling-stroke;
+}
+
+.shape-start {
+  fill: var(--accent-warm);
+}
+
+.modulator-item.is-muted .shape-curve {
+  stroke: var(--muted);
+  opacity: 0.5;
+}
+
+.modulator-item.is-muted .shape-start {
+  fill: var(--muted);
+}
+
 .modulator-field {
   min-width: 140px;
 }
@@ -425,16 +611,21 @@ input[type="number"]::-webkit-inner-spin-button {
   margin-left: auto;
 }
 
+/* Deliberately not a scroll container: an overflow value other than `visible`
+   clips absolutely-positioned descendants, which cropped the sound menu on
+   lower instrument rows. Horizontal scrolling lives on .board-scroll instead. */
 .sequencer-scroll {
-  overflow-x: auto;
-  overflow-y: hidden;
   padding-bottom: 6px;
 }
 
 .sequencer-stack {
-  min-width: max-content;
   display: grid;
   gap: 14px;
+}
+
+.board-scroll {
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
 .sequencer-layout {
@@ -444,10 +635,19 @@ input[type="number"]::-webkit-inner-spin-button {
   align-items: start;
 }
 
+/* The rail must advance in exactly the same pitch as .board-grid or the labels
+   drift away from their rows, one gap per track. The grid uses no row gap, so
+   neither can this: the heading offset is carried by a margin instead, matching
+   .board-shell's 6px gap between its header and grid. */
 .label-rail {
   display: grid;
-  grid-template-rows: 48px repeat(auto-fit, minmax(var(--matrix-row-height), auto));
-  gap: 6px;
+  /* 48px heading + 6px .board-shell gap + 1px .board-grid border, so rail row N
+     starts exactly where grid row N does. A margin on the heading cannot do
+     this: the track is a fixed size, so the margin shrinks the item inside it
+     rather than displacing the rows below. */
+  grid-template-rows: 55px;
+  grid-auto-rows: var(--matrix-row-height);
+  gap: 0;
   padding-top: 0;
 }
 
@@ -465,10 +665,13 @@ input[type="number"]::-webkit-inner-spin-button {
   font-weight: 500;
   padding: 0 4px;
   opacity: 0.85;
+  align-self: start;
+  height: 48px;
 }
 
 .label-row {
-  min-height: var(--matrix-row-height);
+  min-height: 0;
+  height: 100%;
   align-self: stretch;
 }
 
@@ -480,7 +683,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .instrument-name {
-  min-height: var(--matrix-row-height);
+  min-height: 0;
   height: 100%;
   padding: 4px 10px;
   display: grid;
@@ -488,10 +691,88 @@ input[type="number"]::-webkit-inner-spin-button {
   gap: 1px;
 }
 
+.instrument-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.instrument-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .instrument-name strong {
   font-size: 0.92rem;
   line-height: 1.05;
   font-weight: 500;
+}
+
+.preview-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--accent-strong);
+  /* Optically centres the triangle, which is left-heavy in its glyph box. */
+  font-size: 0.56rem;
+  line-height: 1;
+  text-indent: 1px;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease, color 0.15s ease;
+}
+
+.preview-button:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.preview-button:active {
+  transform: scale(0.9);
+}
+
+.preview-button:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.sound-option-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sound-option-row .sound-option {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.preview-button.is-inline {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+}
+
+@media (pointer: coarse) {
+  /* Keep the tap target usable without inflating the row visually. */
+  .preview-button {
+    width: 30px;
+    height: 30px;
+  }
+
+  .preview-button.is-inline {
+    width: 32px;
+    height: 32px;
+  }
 }
 
 .instrument-name small {
@@ -617,9 +898,12 @@ input[type="number"]::-webkit-inner-spin-button {
   outline: none;
 }
 
+/* Header and grid are the two rows of this single-column grid, so both stretch
+   to the same width and their columns stay aligned while the board scrolls. */
 .board-shell {
   display: grid;
   gap: 6px;
+  min-width: max-content;
 }
 
 .board-header {
@@ -640,6 +924,108 @@ input[type="number"]::-webkit-inner-spin-button {
   transition:
     transform 160ms ease,
     border-color 160ms ease;
+}
+
+.delay-value {
+  display: block;
+  width: 100%;
+}
+
+.column-menu-button {
+  width: 100%;
+  max-width: 46px;
+  height: 15px;
+  margin: 0 auto;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.column-menu-button:hover,
+.column-menu-button.is-open {
+  opacity: 1;
+  background: rgba(43, 49, 59, 0.07);
+  color: var(--ink);
+}
+
+.column-menu-button:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+  opacity: 1;
+}
+
+.column-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: transparent;
+}
+
+.column-menu {
+  position: fixed;
+  z-index: 41;
+  min-width: 200px;
+  max-width: calc(100vw - 24px);
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid rgba(43, 49, 59, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 253, 248, 0.98);
+  box-shadow: 0 18px 38px rgba(41, 37, 30, 0.16);
+}
+
+.column-menu-title {
+  margin: 2px 8px 6px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.column-menu-item {
+  min-height: 36px;
+  padding: 0 10px;
+  text-align: left;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.column-menu-item:hover:not(:disabled) {
+  background: rgba(95, 176, 151, 0.16);
+}
+
+.column-menu-item:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: -2px;
+}
+
+.column-menu-item.is-danger {
+  color: #b4483c;
+}
+
+.column-menu-item.is-danger:hover:not(:disabled) {
+  background: rgba(255, 143, 131, 0.18);
+}
+
+.column-menu-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .delay-chip input {

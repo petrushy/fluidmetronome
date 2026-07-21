@@ -1,0 +1,29 @@
+{
+  "name": "fluidmetronome",
+  "version": "1.0.0",
+  "description": "Starter template for a Progressive Web App metronome aimed at uneven rhythmic structures common in Swedish folk traditions, including patterns built from variable step lengths rather than only uniform beats.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test:audio": "node tests/audio/worklet-stall.mjs && node tests/audio/preset-levels.mjs && node tests/audio/modulator-direction.mjs",
+    "test:browser": "node tests/browser/layout.mjs chromium && node tests/browser/column-menu.mjs chromium && node tests/browser/pattern-io.mjs chromium && node tests/browser/export-scope.mjs && node tests/browser/rename.mjs && node tests/browser/pattern-stats.mjs && node tests/browser/ticks-input.mjs && node tests/browser/modulator-shape.mjs",
+    "test:webkit": "node tests/browser/layout.mjs webkit && node tests/browser/column-menu.mjs webkit && node tests/browser/pattern-io.mjs webkit && node tests/browser/export-scope.mjs && node tests/browser/rename.mjs && node tests/browser/pattern-stats.mjs && node tests/browser/ticks-input.mjs && node tests/browser/modulator-shape.mjs",
+    "test": "npm run test:audio && npm run test:browser"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/petrushy/fluidmetronome.git"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/petrushy/fluidmetronome/issues"
+  },
+  "homepage": "https://github.com/petrushy/fluidmetronome#readme",
+  "devDependencies": {
+    "node-web-audio-api": "^2.0.0",
+    "playwright": "^1.61.1"
+  }
+}

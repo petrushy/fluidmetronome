@@ -46,6 +46,14 @@ If your shell picks up Homebrew `cargo`/`rustc` before the rustup-managed toolch
 
 Firebase is used only for Hosting so the app can be reached from desktop and mobile browsers.
 
+## CI/CD deployment
+
+GitHub Actions tests pull requests and deploys successful pushes to `master`
+to Firebase Hosting. Complete the one-time service-account setup in
+[Firebase CI/CD authentication](docs/firebase-cicd.md) before the first
+deployment. The credential belongs only in the GitHub repository secret; it is
+never committed to this repository.
+
 ## Tests
 
 ```

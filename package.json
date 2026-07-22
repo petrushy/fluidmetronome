@@ -7,7 +7,7 @@
     "doc": "docs"
   },
   "scripts": {
-    "test:audio": "node tests/audio/worklet-stall.mjs && node tests/audio/preset-levels.mjs && node tests/audio/modulator-direction.mjs",
+    "test:audio": "node tests/audio/worklet-stall.mjs && node tests/audio/preset-levels.mjs && node tests/audio/modulator-direction.mjs && node tests/audio/transport-lifecycle.mjs",
     "test:browser": "node tests/browser/layout.mjs chromium && node tests/browser/column-menu.mjs chromium && node tests/browser/export-scope.mjs && node tests/browser/pattern-io.mjs chromium && node tests/browser/rename.mjs chromium && node tests/browser/pattern-stats.mjs chromium && node tests/browser/ticks-input.mjs chromium && node tests/browser/modulator-shape.mjs chromium && node tests/browser/transport-recovery.mjs chromium",
     "test:webkit": "node tests/browser/layout.mjs webkit && node tests/browser/column-menu.mjs webkit && node tests/browser/export-scope.mjs && node tests/browser/pattern-io.mjs webkit && node tests/browser/rename.mjs webkit && node tests/browser/pattern-stats.mjs webkit && node tests/browser/ticks-input.mjs webkit && node tests/browser/modulator-shape.mjs webkit && node tests/browser/transport-recovery.mjs webkit",
     "test": "npm run test:audio && npm run test:browser"

@@ -36,7 +36,12 @@
       this.workletReady = null;
       this.isRunning = false;
       this.transportGeneration = 0;
+      this.patternRevision = 0;
       this.pattern = null;
+      // Every transport generation receives its own output gate. Retiring a
+      // gate silences sources already scheduled by Web Audio without muting a
+      // preview or allowing a stopped generation to reappear on the next start.
+      this.transportGain = null;
       this.trackSamples = new Map();
       this.trackSampleKeys = new Map();
       this.noiseBuffers = new Map();
@@ -148,6 +153,10 @@
         return;
       }
 
+      if (Number(message.revision) !== this.patternRevision) {
+        return;
+      }
+
       const when = Number(message.when);
       const stepIndex = Number(message.stepIndex);
       if (!Number.isFinite(when) || !Number.isInteger(stepIndex)) {
@@ -212,6 +221,7 @@
       this.transportNode.port.postMessage({
         type: "pattern",
         pattern: this.pattern,
+        revision: this.patternRevision,
       });
     }
 
@@ -220,7 +230,16 @@
         throw new Error("Pattern is empty.");
       }
 
+      const wasRunning = this.isRunning;
       this.pattern = pattern;
+      this.patternRevision += 1;
+
+      // The worklet can already have up to a lookahead window of old sources
+      // queued. Put the new pattern on a fresh gate so those old hits cannot
+      // survive a live edit and play with the wrong instruments or velocities.
+      if (wasRunning) {
+        this.replaceTransportOutput();
+      }
       this.ensureRemoteTrackSamples();
       this.ensurePresetBuffers();
       this.postPatternToTransport();
@@ -232,6 +251,7 @@
       }
 
       const scheduledWhen = Math.max(when, this.audioContext.currentTime + 0.0005);
+      const destination = this.transportGain || this.masterGain;
       this.pattern.tracks.forEach((track, trackIndex) => {
         const velocity = track.step_velocities?.[stepIndex] ?? (track.enabled_steps?.[stepIndex] ? 3 : 0);
         if (!velocity) {
@@ -240,20 +260,20 @@
 
         const sampleBuffer = this.trackSamples.get(trackIndex);
         if (sampleBuffer) {
-          this.playSample(sampleBuffer, velocity, scheduledWhen);
+          this.playSample(sampleBuffer, velocity, scheduledWhen, destination);
           return;
         }
 
-        this.playPreset(track.sound_preset || "metronome", track.instrument, track.note, velocity, scheduledWhen);
+        this.playPreset(track.sound_preset || "metronome", track.instrument, track.note, velocity, scheduledWhen, destination);
       });
     }
 
-    playPreset(preset, instrument, note, velocity, when) {
+    playPreset(preset, instrument, note, velocity, when, destination = this.masterGain) {
       const gainScale = this.velocityGain(velocity);
       const presetKey = this.presetBufferKey(preset, instrument, note);
       const presetBuffer = this.presetBuffers.get(presetKey);
       if (presetBuffer) {
-        this.playBuffer(presetBuffer, gainScale, when);
+        this.playBuffer(presetBuffer, gainScale, when, destination);
         return;
       }
 
@@ -263,7 +283,7 @@
 
       this.renderPresetToDestination(
         this.audioContext,
-        this.masterGain,
+        destination,
         preset,
         instrument,
         note,
@@ -355,7 +375,7 @@
       );
     }
 
-    playBuffer(buffer, gainScale, when) {
+    playBuffer(buffer, gainScale, when, destination = this.masterGain) {
       const context = this.audioContext;
       const source = context.createBufferSource();
       const gain = context.createGain();
@@ -364,12 +384,12 @@
       gain.gain.setValueAtTime(gainScale, when);
 
       source.connect(gain);
-      gain.connect(this.masterGain);
+      gain.connect(destination);
       source.start(when);
     }
 
-    playSample(buffer, velocity, when) {
-      this.playBuffer(buffer, this.velocityGain(velocity), when);
+    playSample(buffer, velocity, when, destination = this.masterGain) {
+      this.playBuffer(buffer, this.velocityGain(velocity), when, destination);
     }
 
     ensureRemoteTrackSamples() {
@@ -380,7 +400,8 @@
       this.pattern.tracks.forEach((track, trackIndex) => {
         const remoteUrl = track.sample_download_url;
         if (!remoteUrl) {
-          if (this.trackSampleKeys.get(trackIndex)?.startsWith("remote:")) {
+          const localKey = track.sample_name ? `local:${track.sample_name}` : null;
+          if (this.trackSampleKeys.get(trackIndex) !== localKey) {
             this.trackSamples.delete(trackIndex);
             this.trackSampleKeys.delete(trackIndex);
           }
@@ -392,7 +413,18 @@
           return;
         }
 
-        this.loadRemoteSample(trackIndex, remoteUrl).catch((error) => {
+        // Mark the request before fetching. This prevents duplicate downloads
+        // on each UI re-render and lets a later pattern change invalidate an
+        // older request before it resolves.
+        this.trackSamples.delete(trackIndex);
+        this.trackSampleKeys.set(trackIndex, nextKey);
+        this.loadRemoteSample(trackIndex, remoteUrl, nextKey).catch((error) => {
+          // Permit a later pattern sync to retry a transient network failure.
+          // Do not clear a newer selection that replaced this request meanwhile.
+          if (this.trackSampleKeys.get(trackIndex) === nextKey) {
+            this.trackSampleKeys.delete(trackIndex);
+            this.trackSamples.delete(trackIndex);
+          }
           console.error("Failed to load remote sample", error);
         });
       });
@@ -597,7 +629,7 @@
       );
     }
 
-    async loadRemoteSample(trackIndex, url) {
+    async loadRemoteSample(trackIndex, url, expectedKey = `remote:${url}`) {
       const context = this.ensureContext();
       const response = await fetch(url);
       if (!response.ok) {
@@ -606,8 +638,40 @@
 
       const arrayBuffer = await response.arrayBuffer();
       const audioBuffer = await context.decodeAudioData(arrayBuffer.slice(0));
+      // A different pattern/source may have claimed this track slot while the
+      // network request was pending. Never let a late response overwrite it.
+      if (this.trackSampleKeys.get(trackIndex) !== expectedKey) {
+        return;
+      }
+
       this.trackSamples.set(trackIndex, audioBuffer);
-      this.trackSampleKeys.set(trackIndex, `remote:${url}`);
+    }
+
+    createTransportOutput() {
+      const context = this.ensureContext();
+      const gate = context.createGain();
+      gate.gain.value = 1;
+      gate.connect(this.masterGain);
+      this.transportGain = gate;
+      return gate;
+    }
+
+    retireTransportOutput() {
+      const gate = this.transportGain;
+      this.transportGain = null;
+      if (!gate || !this.audioContext) {
+        return;
+      }
+
+      const now = this.audioContext.currentTime;
+      gate.gain.cancelScheduledValues(now);
+      gate.gain.setValueAtTime(Math.max(gate.gain.value, 0.0001), now);
+      gate.gain.exponentialRampToValueAtTime(0.0001, now + 0.003);
+    }
+
+    replaceTransportOutput() {
+      this.retireTransportOutput();
+      this.createTransportOutput();
     }
 
     instrumentSettings(instrument) {
@@ -750,6 +814,7 @@
           return;
         }
 
+        this.replaceTransportOutput();
         this.postPatternToTransport();
         this.transportNode.port.postMessage({
           type: "start",
@@ -764,6 +829,7 @@
     stop() {
       this.isRunning = false;
       this.transportGeneration += 1;
+      this.retireTransportOutput();
       this.timingStatus = {
         state: "idle",
         latest_lead_ms: null,
@@ -802,7 +868,10 @@
     const arrayBuffer = await file.arrayBuffer();
     const audioBuffer = await context.decodeAudioData(arrayBuffer.slice(0));
     engine.trackSamples.set(trackIndex, audioBuffer);
-    engine.trackSampleKeys.set(trackIndex, `local:${file.name}:${file.size}:${file.lastModified}`);
+    // The Rust model persists the display name while the decoded local buffer
+    // lives only in this page. Match the same key so edits retain the sample,
+    // but switching pattern or selecting a preset clears it immediately.
+    engine.trackSampleKeys.set(trackIndex, `local:${file.name}`);
     return true;
   };
 

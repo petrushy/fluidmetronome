@@ -82,5 +82,33 @@ drive("healthy + modulator", {
   }],
 }, { expectStall: false });
 
+// A large negative offset used to make the first event land many seconds in
+// the past. The main thread then had no choice but to clamp it to "now", which
+// made the first hit audibly late. The worklet must move its transport origin
+// forward by the maximum advance so the first emitted hit still has a lead-in.
+{
+  const processor = new Processor();
+  const messages = [];
+  processor.port.postMessage = (message) => messages.push(message);
+  globalThis.currentFrame = 0;
+  processor.port.onmessage({ data: { type: "pattern", pattern: {
+    ...base,
+    bpm: 30,
+    ticks_per_beat: 8,
+    steps: [{ delay_ticks: 8 }],
+    modulators: [{
+      id: 1, function: "Cos", amplitude_ticks: -64, wavelength_ticks: 8,
+      phase_degrees: 0, muted: false, restart_each_loop: true,
+    }],
+  } } });
+  processor.port.onmessage({ data: { type: "start", generation: 1 } });
+  processor.process([], [[new Float32Array(128)]]);
+
+  const trigger = messages.find((message) => message.type === "trigger");
+  const safeLead = trigger && trigger.when >= 0.119;
+  if (!safeLead) failures += 1;
+  console.log(`${safeLead ? "PASS " : "FAIL "} large negative offset starts with lead  when=${trigger?.when}`);
+}
+
 console.log(failures === 0 ? "\nworklet cannot stall the audio thread" : `\n${failures} FAILING`);
 process.exit(failures === 0 ? 0 : 1);

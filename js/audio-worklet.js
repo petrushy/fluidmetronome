@@ -11,6 +11,7 @@ class FluidMetronomeProcessor extends AudioWorkletProcessor {
     this.pattern = null;
     this.isRunning = false;
     this.generation = 0;
+    this.patternRevision = 0;
     this.nextStepIndex = 0;
     this.nextStepTick = 0;
     this.nextStepFrame = 0;
@@ -22,6 +23,7 @@ class FluidMetronomeProcessor extends AudioWorkletProcessor {
       switch (data.type) {
         case "pattern":
           this.pattern = data.pattern;
+          this.patternRevision = Number.isInteger(data.revision) ? data.revision : 0;
           if (!this.pattern?.steps?.length) {
             this.nextStepIndex = 0;
             this.nextStepTick = 0;
@@ -35,7 +37,13 @@ class FluidMetronomeProcessor extends AudioWorkletProcessor {
           this.isRunning = true;
           this.nextStepIndex = 0;
           this.nextStepTick = 0;
-          this.nextStepFrame = currentFrame + this.baseLeadInFrames;
+          // A negative timing offset may pull the first note earlier than its
+          // unmodulated column. Start the transport far enough ahead that even
+          // the largest allowed advance still reaches the main thread with the
+          // normal lead-in, instead of being clamped to "now" and heard late.
+          const advanceFrames = this.maximumAdvanceFrames();
+          this.nextStepFrame = currentFrame + this.baseLeadInFrames +
+            (Number.isFinite(advanceFrames) ? advanceFrames : 0);
           break;
         case "stop":
           this.generation = data.generation || this.generation;
@@ -103,6 +111,7 @@ class FluidMetronomeProcessor extends AudioWorkletProcessor {
     this.port.postMessage({
       type: "trigger",
       generation: this.generation,
+      revision: this.patternRevision,
       stepIndex: this.nextStepIndex,
       when: (stepFrame + modulationFrames) / sampleRate,
     });
@@ -129,6 +138,10 @@ class FluidMetronomeProcessor extends AudioWorkletProcessor {
   }
 
   scheduleHorizonFrames() {
+    return this.baseLookaheadFrames + this.maximumAdvanceFrames();
+  }
+
+  maximumAdvanceFrames() {
     const maxAdvanceTicks = (this.pattern.modulators || []).reduce((sum, modulator) => {
       if (modulator.muted) {
         return sum;
@@ -137,7 +150,7 @@ class FluidMetronomeProcessor extends AudioWorkletProcessor {
       return sum + Math.abs(Number(modulator.amplitude_ticks) || 0);
     }, 0);
 
-    return this.baseLookaheadFrames + maxAdvanceTicks * this.tickDurationFrames();
+    return maxAdvanceTicks * this.tickDurationFrames();
   }
 
   totalModulationTicks(stepTick) {

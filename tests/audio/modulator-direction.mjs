@@ -88,7 +88,13 @@ const cos = [{
   phase_degrees: 0, muted: false, restart_each_loop: true,
 }];
 const modulated = triggerTimes(cos);
-const deltaTicks = modulated.map((t, i) => (t - baseline[i]) / TICK_SECONDS);
+// The worklet starts a modulated transport late enough that the furthest
+// negative offset still has its normal lead-in. That is a common origin shift
+// for every column, not part of any column's modulation value.
+const transportOriginShiftTicks = 2;
+const deltaTicks = modulated.map(
+  (t, i) => (t - baseline[i]) / TICK_SECONDS - transportOriginShiftTicks,
+);
 
 console.log(`      shift per column, in mini-ticks: [${deltaTicks.map((d) => d.toFixed(3)).join(", ")}]`);
 
@@ -104,7 +110,9 @@ check("a ZERO value leaves the column alone",
 
 // Inverting the amplitude must mirror every shift.
 const inverted = triggerTimes([{ ...cos[0], amplitude_ticks: -2 }]);
-const invertedTicks = inverted.map((t, i) => (t - baseline[i]) / TICK_SECONDS);
+const invertedTicks = inverted.map(
+  (t, i) => (t - baseline[i]) / TICK_SECONDS - transportOriginShiftTicks,
+);
 check("a negative amplitude mirrors the shifts",
   invertedTicks.every((d, i) => Math.abs(d + deltaTicks[i]) < 1e-6),
   `[${invertedTicks.map((d) => d.toFixed(3)).join(", ")}]`);
